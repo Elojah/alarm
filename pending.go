@@ -43,11 +43,7 @@ func (p *pending) last() time.Time {
 	return p.times[p.index(p.n-1)]
 }
 
-// index returns where the time i after the first is in the ring, for i < len(p.times): a branch costs less than a %.
+// index returns where the time i after the first is in the ring.
 func (p *pending) index(i int) int {
-	if i += p.head; i >= len(p.times) {
-		i -= len(p.times)
-	}
-
-	return i
+	return (p.head + i) % len(p.times)
 }

@@ -30,27 +30,17 @@ type Alarm struct {
 	ending bool
 	// closed is closed by the first Close.
 	closed chan struct{}
-	// wake holds a token while next waits, if Reset found fire asleep, to end its wait.
+	// wake holds a token while next waits, to end the wait of fire.
 	wake chan struct{}
 	// interrupted is set by Reset and Close, so that each pass of fire sees them with a load rather than a lock.
 	interrupted atomic.Bool
-	// asleep is set while fire waits on the timer, so that Reset sends on wake only then: a channel locks.
-	asleep atomic.Bool
 
 	// The Ring under way owns these, kept for the next one.
-	handle Handler
-	done   <-chan struct{}
-	// yield is given to each sequence, bound once per Ring: a range over one allocates its body each time.
-	yield func(time.Time) bool
-	// stopped is set once yield returned false, so that a sequence that yields again reads nothing more.
-	stopped bool
+	handle  Handler
+	done    <-chan struct{}
 	pending pending
 	// timer is created by the first wait that needs it.
 	timer *time.Timer
-	// now is the clock read last, and released whether the holder released a time at it: the next is asked at now
-	// first, and the clock read only if not due.
-	now      time.Time
-	released bool
 }
 
 // New returns an Alarm configured by options.
@@ -72,7 +62,6 @@ func (a *Alarm) Ring(ctx context.Context, times iter.Seq[time.Time], fn func(ctx
 	defer a.end()
 
 	a.handle, a.done = chain(fn, a.middlewares...), ctx.Done()
-	a.yield = func(at time.Time) bool { return a.push(ctx, at) }
 	for {
 		a.ring(ctx, times)
 		next, err := a.take(ctx)
@@ -120,14 +109,10 @@ func (a *Alarm) Reset(times iter.Seq[time.Time]) bool {
 		return false
 	}
 	a.next = times
-	// Stored before asleep is loaded, as sleep stores asleep before loading interrupted: either sleep sees the Reset, or
-	// the Reset wakes it.
 	a.interrupted.Store(true)
-	if a.asleep.Load() {
-		select {
-		case a.wake <- struct{}{}:
-		default:
-		}
+	select {
+	case a.wake <- struct{}{}:
+	default:
 	}
 
 	return true
@@ -193,24 +178,14 @@ func (a *Alarm) start() error {
 
 // ring reads times and fires each, until times ends and the times held fired, or fire stops.
 func (a *Alarm) ring(ctx context.Context, times iter.Seq[time.Time]) {
-	a.stopped = false
-	times(a.yield)
-	if a.stopped {
-		return
+	for at := range times {
+		a.pending.push(at)
+		if !a.fire(ctx, true) {
+			return
+		}
 	}
 	// times ended: fire the ones held.
 	a.fire(ctx, false)
-}
-
-// push holds at and fires the times held, for times to read the next if it returns true.
-func (a *Alarm) push(ctx context.Context, at time.Time) bool {
-	if a.stopped {
-		return false
-	}
-	a.pending.push(at)
-	a.stopped = !a.fire(ctx, true)
-
-	return !a.stopped
 }
 
 // fire fires the times held as the holder releases them. It returns true once none is held, or once the puller reads
@@ -218,7 +193,8 @@ func (a *Alarm) push(ctx context.Context, at time.Time) bool {
 func (a *Alarm) fire(ctx context.Context, read bool) bool {
 	for a.pending.n > 0 {
 		at := a.pending.first()
-		sleep, due := a.release(at)
+		now := time.Now()
+		sleep, due := a.holder.Release(at, now)
 		// Passed times and spins never reach the timer's select.
 		select {
 		case <-a.done:
@@ -234,9 +210,9 @@ func (a *Alarm) fire(ctx context.Context, read bool) bool {
 
 			continue
 		}
-		// A read keeps Ring from at: none while the holder spins. at not due, release read the clock for now.
+		// A read keeps Ring from at: none while the holder spins.
 		if read && sleep > 0 {
-			wait, next := a.puller.Pull(a.pending.n-1, a.pending.last(), a.now)
+			wait, next := a.puller.Pull(a.pending.n-1, a.pending.last(), now)
 			if next {
 				return true
 			}
@@ -251,44 +227,23 @@ func (a *Alarm) fire(ctx context.Context, read bool) bool {
 	return !a.interrupted.Load()
 }
 
-// release asks the holder whether at is due, at the clock read last if the holder released a time there, and only
-// otherwise at the clock: a time due at now is due at any later one, so a run of passed times reads the clock once.
-func (a *Alarm) release(at time.Time) (time.Duration, bool) {
-	if a.released {
-		if sleep, due := a.holder.Release(at, a.now); due {
-			return sleep, true
-		}
-	}
-	a.now = time.Now()
-	sleep, due := a.holder.Release(at, a.now)
-	a.released = due
-
-	return sleep, due
-}
-
 // sleep waits on the timer for d. It returns true once d passed, and false once done, closed or reset.
 func (a *Alarm) sleep(d time.Duration) bool {
-	// Stored before interrupted is loaded, as Reset stores interrupted before loading asleep.
-	a.asleep.Store(true)
-	slept := false
-	if !a.interrupted.Load() {
-		if a.timer == nil {
-			a.timer = time.NewTimer(d)
-		} else {
-			// No stale value to drain since Go 1.23.
-			a.timer.Reset(d)
-		}
-		select {
-		case <-a.timer.C:
-			slept = true
-		case <-a.done:
-		case <-a.closed:
-		case <-a.wake:
-		}
+	if a.timer == nil {
+		a.timer = time.NewTimer(d)
+	} else {
+		// No stale value to drain since Go 1.23.
+		a.timer.Reset(d)
 	}
-	a.asleep.Store(false)
+	select {
+	case <-a.timer.C:
+		return true
+	case <-a.done:
+	case <-a.closed:
+	case <-a.wake:
+	}
 
-	return slept
+	return false
 }
 
 // take returns the sequence a Reset gave, once ring returned, dropping the times held. Otherwise it returns nil and
@@ -312,8 +267,7 @@ func (a *Alarm) take(ctx context.Context) (iter.Seq[time.Time], error) {
 	return times, nil
 }
 
-// end marks the Ring under way returned, dropping a Reset it did not take, stops the timer, and forgets the clock read
-// last, so that the next Ring reads it.
+// end marks the Ring under way returned, dropping a Reset it did not take, and stops the timer.
 func (a *Alarm) end() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -321,7 +275,6 @@ func (a *Alarm) end() {
 	if a.timer != nil {
 		a.timer.Stop()
 	}
-	a.released = false
 	a.drop()
 	a.ending = false
 	close(a.ringing)
