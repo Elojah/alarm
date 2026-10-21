@@ -18,7 +18,7 @@ func main() {
 		start.Add(90 * time.Millisecond),
 	}
 
-	for at := range alarm.Chan(context.Background(), slices.Values(times)) {
+	for at := range alarm.New().Chan(context.Background(), slices.Values(times)) {
 		fmt.Println("fired", at.Sub(start))
 	}
 }

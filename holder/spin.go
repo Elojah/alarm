@@ -15,7 +15,7 @@ func NewSpin(d time.Duration) Spin {
 }
 
 // Release returns true once at is due at now. Otherwise it returns how long until the last d before at, or 0 within
-// it, so that Run asks again at once.
+// it, so that Ring asks again at once.
 func (s Spin) Release(at, now time.Time) (time.Duration, bool) {
 	d := at.Sub(now)
 	if d <= 0 {

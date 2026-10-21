@@ -20,9 +20,10 @@ func main() {
 		start.Add(60 * time.Millisecond),
 	}
 
-	err := alarm.Run(context.Background(), slices.Values(times), func(_ context.Context, at time.Time) {
+	a := alarm.New(alarm.WithMiddleware(middleware.MaxDelay(10 * time.Millisecond)))
+	err := a.Ring(context.Background(), slices.Values(times), func(_ context.Context, at time.Time) {
 		fmt.Println("fired", at.Sub(start))
-	}, alarm.WithMiddleware(middleware.MaxDelay(10*time.Millisecond)))
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

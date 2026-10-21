@@ -1,4 +1,4 @@
-// Two pairs of times read ahead by puller.NewHorizon: Run reads the next time once the last read is due within 50ms.
+// Two pairs of times read ahead by puller.NewHorizon: Ring reads the next time once the last read is due within 50ms.
 package main
 
 import (
@@ -22,9 +22,10 @@ func main() {
 		}
 	}
 
-	err := alarm.Run(context.Background(), times, func(_ context.Context, at time.Time) {
+	a := alarm.New(alarm.WithPuller(puller.NewHorizon(50*time.Millisecond, 0)))
+	err := a.Ring(context.Background(), times, func(_ context.Context, at time.Time) {
 		fmt.Println("fired", at.Sub(start))
-	}, alarm.WithPuller(puller.NewHorizon(50*time.Millisecond, 0)))
+	})
 	if err != nil {
 		log.Fatal(err)
 	}

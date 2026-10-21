@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Handler is called with each time: fn given to Run, and what a Middleware wraps.
+// Handler is called with each time: fn given to Ring, and what a Middleware wraps.
 type Handler func(ctx context.Context, at time.Time)
 
 // Middleware wraps a Handler, for WithMiddleware. Package middleware holds ready-made ones.

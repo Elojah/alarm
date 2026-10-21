@@ -18,15 +18,20 @@ if err != nil {
 	return err
 }
 
-err = alarm.Run(ctx, set.Between(time.Now(), time.Time{}), func(ctx context.Context, at time.Time) {
+a := alarm.New(alarm.WithHolder(holder.NewSpin(time.Millisecond)))
+err = a.Ring(ctx, set.Between(time.Now(), time.Time{}), func(ctx context.Context, at time.Time) {
 	fmt.Println("fired", at)
-}, alarm.WithHolder(holder.NewSpin(time.Millisecond)))
+})
 ```
 
 | Function | Does |
 | --- | --- |
-| `Run(ctx, times, fn, ...Option)` | Calls `fn` with `ctx` and each time once due, in the calling goroutine, until `times` ends or `ctx` is done. |
-| `Chan(ctx, times, ...Option)` | The same, sending on the returned channel from its own goroutine. |
+| `New(...Option)` | Returns an Alarm, configured by the options. |
+| `a.Ring(ctx, times, fn)` | Calls `fn` with `ctx` and each time once due, in the calling goroutine, until `times` ends, `ctx` is done or `a` is closed. |
+| `a.Chan(ctx, times)` | The same, sending on the returned channel from its own goroutine. |
+| `a.Reset(times)` | Makes the Ring under way drop the times it holds and read `times` instead. |
+| `a.Close()` | Stops the Ring under way without waiting for it. Later ones return `ErrClosed`. |
+| `a.Shutdown(ctx)` | `Close`, then waits until the Ring under way returns. |
 
 | Option | Does |
 | --- | --- |
@@ -48,17 +53,25 @@ Each time is waited for itself, not as a gap from the last, so lateness never ad
 start a set at now with `Between`, or drop it with `middleware.MaxDelay`. A wait polls the clock at least once a
 minute, or as `WithPoll` sets, so a clock step or a suspend shows within it.
 
+## Stopping and changing the sequence
+
+`Reset`, `Close` and `Shutdown` reach the Ring under way from any goroutine, `fn` included, once the `fn` call in
+progress returns. `Reset` drops the times read and not fired yet, and reads the new sequence at once, such as a rule
+edited while it rings. `Close` stops the Ring without waiting, so `fn` can call it, and `Shutdown` waits until it
+returns, or until its own `ctx` is done. Neither cancels `fn`'s `ctx`: cancel Ring's to interrupt `fn`. An Alarm rings
+one sequence at a time, and rings again once a Ring returned, until closed.
+
 ## Reading ahead
 
 A time is read once the last fired, so a slow sequence, such as one read from a store, takes its time from the wait
-of the next. `WithPuller` reads times ahead, while Run waits: `puller.NewHorizon(time.Minute, 1000)` reads each time a
-minute before it, holding at most 1000. Run reads in its own goroutine, so a read still keeps it from the time it waits
+of the next. `WithPuller` reads times ahead, while Ring waits: `puller.NewHorizon(time.Minute, 1000)` reads each time a
+minute before it, holding at most 1000. Ring reads in its own goroutine, so a read still keeps it from the time it waits
 for: it reads none while that time is due or a `holder.NewSpin` spins, and wakes for a read when the puller says, not
 only at a poll. Times held cost no allocation once the buffer holding them has grown.
 
 ## Precision
 
-On Linux a timer fires up to a millisecond late. `holder.NewSpin` wakes Run earlier and busy-waits the rest, taking a
+On Linux a timer fires up to a millisecond late. `holder.NewSpin` wakes Ring earlier and busy-waits the rest, taking a
 core while it does.
 
 Intel Core Ultra 5 226V, GOMAXPROCS 8 (`make bench`):
@@ -70,19 +83,21 @@ Intel Core Ultra 5 226V, GOMAXPROCS 8 (`make bench`):
 | 10ms | | 668µs | 1276µs | 3% |
 | 10ms | 1ms | 1µs | 2µs | 9% |
 
-Without a spin, Run costs what a `time.Ticker` does, without its drift. A passed time costs Run 62ns, and Chan 575ns
+Without a spin, Ring costs what a `time.Ticker` does, without its drift. A passed time costs Ring 62ns, and Chan 575ns
 for the handoff to the reader.
 
 ## Examples
 
-Run one with `go run ./examples/01-run`.
+Run one with `go run ./examples/01-ring`.
 
 | Example | Shows |
 | --- | --- |
-| [`01-run`](examples/01-run/main.go) | Pulses from an iterator, with `Run` and `holder.NewSpin`. |
+| [`01-ring`](examples/01-ring/main.go) | Pulses from an iterator, with `Ring` and `holder.NewSpin`. |
 | [`02-chan`](examples/02-chan/main.go) | Times from a slice, received from `Chan`. |
 | [`03-max-delay`](examples/03-max-delay/main.go) | A passed time dropped by `middleware.MaxDelay`. |
 | [`04-horizon`](examples/04-horizon/main.go) | Times read ahead by `puller.NewHorizon`. |
+| [`05-reset`](examples/05-reset/main.go) | An endless sequence replaced from `fn` by `Reset`. |
+| [`06-shutdown`](examples/06-shutdown/main.go) | Times received from `Chan` until the reader calls `Shutdown`. |
 
 ## Development
 

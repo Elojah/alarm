@@ -5,11 +5,11 @@ import (
 	"time"
 )
 
-// Option configures Run and Chan.
+// Option configures an Alarm, passed to New.
 type Option func(c *config)
 
-// WithHolder makes h decide when each time is due, rather than once the clock shows it. Give each Run its own. A nil h
-// is ignored.
+// WithHolder makes h decide when each time is due, rather than once the clock shows it. Give each Alarm its own. A nil
+// h is ignored.
 func WithHolder(h Holder) Option {
 	return func(c *config) {
 		if h != nil {
@@ -25,7 +25,7 @@ func WithMiddleware(middlewares ...Middleware) Option {
 	}
 }
 
-// WithPoll makes Run poll the clock at least every d while it waits, a minute by default, so that a wall clock step or
+// WithPoll makes Ring poll the clock at least every d while it waits, a minute by default, so that a wall clock step or
 // a suspend shows within d: timers run on the monotonic clock. d <= 0 means never.
 func WithPoll(d time.Duration) Option {
 	return func(c *config) {
@@ -36,8 +36,8 @@ func WithPoll(d time.Duration) Option {
 	}
 }
 
-// WithPuller makes p decide when Run reads each time of the sequence ahead, rather than once it fired the last. Give
-// each Run its own. A nil p is ignored.
+// WithPuller makes p decide when Ring reads each time of the sequence ahead, rather than once it fired the last. Give
+// each Alarm its own. A nil p is ignored.
 func WithPuller(p Puller) Option {
 	return func(c *config) {
 		if p != nil {

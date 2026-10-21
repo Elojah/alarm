@@ -46,7 +46,7 @@ test: ## Run tests with race detector, shuffled, with GOMAXPROCS 1 and 4
 
 # Bench
 .PHONY: bench
-# BenchmarkRun_Late waits on the real clock: its ns/op is the period.
+# BenchmarkRing_Late waits on the real clock: its ns/op is the period.
 bench: ## Run the benchmarks: the cost of a time, and how late times fire
 	$(info $(M) running go test -bench) @
 	$Q $(GO) test -run '^$$' -bench . -benchmem ./...
