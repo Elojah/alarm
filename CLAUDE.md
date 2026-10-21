@@ -6,8 +6,8 @@ dependency, one package. Behaviour is in godoc and the README, plans in TODO.md.
 
 ## Layout
 
-- `doc.go`: the package doc. `alarm.go`: `Run`, `Chan`, the options, and `waiter`, which waits for each
-  time. `bench_test.go`: the cost of a time, and how late times fire on the real clock.
+- `doc.go`: the package doc. `alarm.go`: `Run`, `Chan`, and `waiter`, which waits for each time. `option.go`: the
+  options and `config`. `bench_test.go`: the cost of a time, and how late times fire on the real clock.
 
 ## Commands
 

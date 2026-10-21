@@ -1,5 +1,4 @@
-// Three times from a slice. Chan sends each on the channel it returns once the clock shows it, and closes it once the
-// times end.
+// Three times from a slice, received from Chan.
 package main
 
 import (

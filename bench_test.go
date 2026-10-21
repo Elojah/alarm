@@ -10,7 +10,7 @@ import (
 	"github.com/elojah/alarm"
 )
 
-// passed yields times that have all passed, one per iteration of b.Loop.
+// passed yields a passed time per b.Loop iteration.
 func passed(b *testing.B) iter.Seq[time.Time] {
 	b.Helper()
 
@@ -25,18 +25,18 @@ func passed(b *testing.B) iter.Seq[time.Time] {
 	}
 }
 
-// What Run costs a time, without waiting.
+// Run's cost per time, without waiting.
 func BenchmarkRun_Passed(b *testing.B) {
 	_ = alarm.Run(b.Context(), passed(b), func(time.Time) {})
 }
 
-// What Chan costs a time, without waiting: a handoff to the reader's goroutine.
+// Chan's cost per time, without waiting: a handoff to the reader.
 func BenchmarkChan_Passed(b *testing.B) {
 	for range alarm.Chan(b.Context(), passed(b)) {
 	}
 }
 
-// How late Run calls fn on the real clock, for a time every period, with and without spinning.
+// How late times fire on the real clock, with and without a spin.
 func BenchmarkRun_Late(b *testing.B) {
 	for _, period := range []time.Duration{time.Millisecond, 10 * time.Millisecond} {
 		for _, spin := range []time.Duration{0, time.Millisecond, 2 * time.Millisecond} {
@@ -47,7 +47,7 @@ func BenchmarkRun_Late(b *testing.B) {
 	}
 }
 
-// late runs Run for a time every period, on the real clock, and reports how late it calls fn.
+// late reports how late Run fires a time every period.
 func late(b *testing.B, period time.Duration, options ...alarm.Option) {
 	b.Helper()
 

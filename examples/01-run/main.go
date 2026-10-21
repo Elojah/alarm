@@ -1,5 +1,4 @@
-// A pulse every 100ms, five times, from a sequence that computes each time as Run asks for it. Run calls fn once the
-// clock shows each, busy-waiting for the last millisecond rather than leaving it to the timer.
+// Five pulses 100ms apart, from an iterator, with Run and WithSpin.
 package main
 
 import (

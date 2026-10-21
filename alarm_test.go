@@ -11,7 +11,7 @@ import (
 	"github.com/elojah/alarm"
 )
 
-// call is a time fired and when it was, from the bubble's start.
+// call is a time fired and when, both from start.
 type call struct {
 	at, now time.Duration
 }
@@ -26,7 +26,7 @@ func after(start time.Time, ds ...time.Duration) []time.Time {
 	return times
 }
 
-// record returns a fn for Run that appends each call to calls, then sleeps for the next of sleeps, if any.
+// record appends each call to calls, then sleeps for the next of sleeps, if any.
 func record(start time.Time, calls *[]call, sleeps ...time.Duration) func(time.Time) {
 	return func(at time.Time) {
 		*calls = append(*calls, call{at: at.Sub(start), now: time.Since(start)})
@@ -37,7 +37,7 @@ func record(start time.Time, calls *[]call, sleeps ...time.Duration) func(time.T
 	}
 }
 
-// Each time fires once the clock shows it, even past maxSleep, and Run returns nil once times ends.
+// Times fire on time, even past maxSleep.
 func TestRun(t *testing.T) {
 	t.Parallel()
 
@@ -56,7 +56,7 @@ func TestRun(t *testing.T) {
 	})
 }
 
-// A late call delays only the times it passed, and passed times fire at once, in order.
+// Passed times fire at once, in order, and a late call delays only the times it passes.
 func TestRun_Late(t *testing.T) {
 	t.Parallel()
 
@@ -81,7 +81,7 @@ func TestRun_Late(t *testing.T) {
 	})
 }
 
-// Run returns once ctx is done, while it waits or during a run of passed times.
+// Run stops once ctx is done, while waiting or firing passed times.
 func TestRun_Cancel(t *testing.T) {
 	t.Parallel()
 
@@ -123,7 +123,7 @@ func TestRun_Cancel(t *testing.T) {
 	})
 }
 
-// A time passed by more than the max delay is dropped, the others fire.
+// A time passed by more than the max delay is dropped.
 func TestWithMaxDelay(t *testing.T) {
 	t.Parallel()
 
@@ -144,7 +144,7 @@ func TestWithMaxDelay(t *testing.T) {
 	})
 }
 
-// Spinning never fires a time early, and stops once ctx is done. On the real clock: a spin never ends in a bubble.
+// A spin never fires early, and stops once ctx is done. On the real clock: a spin never ends in a bubble.
 func TestWithSpin(t *testing.T) {
 	t.Parallel()
 
@@ -179,7 +179,7 @@ func TestWithSpin(t *testing.T) {
 	})
 }
 
-// Each time is sent once the clock shows it, and the channel closes once times ends.
+// Times are sent on time, then the channel closes.
 func TestChan(t *testing.T) {
 	t.Parallel()
 
@@ -196,7 +196,7 @@ func TestChan(t *testing.T) {
 	})
 }
 
-// Once ctx is done, the channel closes, even with a time left.
+// The channel closes once ctx is done, even with times left.
 func TestChan_Cancel(t *testing.T) {
 	t.Parallel()
 

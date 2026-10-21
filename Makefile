@@ -1,11 +1,10 @@
 GO                 = go
 GOFMT              = gofmt
 
-# The examples tinygo-run and tinygo-build cover, and the board tinygo-build targets.
 TINYGO             = tinygo
 TINYGO_TARGET     ?= pico
 EXAMPLES           = $(patsubst %/,%,$(wildcard examples/*/))
-# Prints the lines under // Output: in an example's main_test.go, without their //.
+# Prints an example's // Output: block.
 EXAMPLE_OUTPUT     = awk '/\/\/ Output:/ { f = 1; next } f && /^}/ { f = 0 } f { sub(/^\t\/\/ ?/, ""); print }'
 
 # For CI
@@ -40,27 +39,24 @@ lint: ## Run golangci-lint
 
 # Test
 .PHONY: test
-# GOMAXPROCS 1 interleaves goroutines differently from several cores, and -shuffle, whose seed -v prints, catches tests
-# that depend on each other.
+# -cpu 1,4 varies interleavings, -shuffle catches tests that depend on each other.
 test: ## Run tests with race detector, shuffled, with GOMAXPROCS 1 and 4
 	$(info $(M) running go test) @
 	$Q $(GO) test -cover -race -shuffle=on -cpu 1,4 -v ./...
 
 # Bench
 .PHONY: bench
-# BenchmarkRun_Late waits on the real clock: its ns/op is the period, its metrics how late times fire.
+# BenchmarkRun_Late waits on the real clock: its ns/op is the period.
 bench: ## Run the benchmarks: the cost of a time, and how late times fire
 	$(info $(M) running go test -bench) @
 	$Q $(GO) test -run '^$$' -bench . -benchmem ./...
 
 # TinyGo
-# testing/synctest, which the timing tests use, does not link with TinyGo, and tinygo test runs no Example. So tinygo-run
-# runs each example and checks its output, and tinygo-build only compiles for TINYGO_TARGET.
+# testing/synctest does not link with TinyGo, and tinygo test runs no Example: the examples are run and diffed instead.
 .PHONY: tinygo
 tinygo: tinygo-run tinygo-build ## Run tinygo-run and tinygo-build
 
 .PHONY: tinygo-run
-# An example passes if it prints its Example's output block.
 tinygo-run: ## Run each example with TinyGo, and diff what it prints with its Example's output
 	$(info $(M) running each example with tinygo run) @
 	$Q set -e; \
@@ -73,7 +69,7 @@ tinygo-run: ## Run each example with TinyGo, and diff what it prints with its Ex
 	done
 
 .PHONY: tinygo-build
-# -size short prints how much flash and RAM each takes.
+# -size short prints flash and RAM used.
 tinygo-build: ## Build each example with TinyGo for TINYGO_TARGET (pico), without running it
 	$(info $(M) building each example for $(TINYGO_TARGET) with tinygo build) @
 	$Q set -e; \
