@@ -25,8 +25,8 @@ func WithMiddleware(middlewares ...Middleware) Option {
 	}
 }
 
-// WithPoll makes Ring poll the clock at least every d while it waits, a minute by default, so that a wall clock step or
-// a suspend shows within d: timers run on the monotonic clock. d <= 0 means never.
+// WithPoll makes Ring poll the clock at least every d while it waits, a minute by default: timers run on the monotonic
+// clock, so a wall clock step or a suspend shows only at a poll. d <= 0 means never.
 func WithPoll(d time.Duration) Option {
 	return func(c *config) {
 		if d <= 0 {
@@ -36,8 +36,8 @@ func WithPoll(d time.Duration) Option {
 	}
 }
 
-// WithPuller makes p decide when Ring reads each time of the sequence ahead, rather than once it fired the last. Give
-// each Alarm its own. A nil p is ignored.
+// WithPuller makes p decide when Ring reads each time ahead, rather than once it fired the last. Give each Alarm its
+// own. A nil p is ignored.
 func WithPuller(p Puller) Option {
 	return func(c *config) {
 		if p != nil {

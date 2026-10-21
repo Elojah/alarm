@@ -2,12 +2,11 @@ package alarm
 
 import "time"
 
-// Holder decides when each time is due, and how long Ring may sleep on its timer meanwhile (WithHolder). Package holder
-// holds ready-made ones. It reads no clock: each call passes now, which has a monotonic reading, so at.Sub(now) is
-// monotonic if at has one.
+// Holder decides when each time is due, and how long Ring may sleep until then (WithHolder). Package holder holds
+// ready-made ones. It reads no clock: Ring passes now, with a monotonic reading.
 type Holder interface {
-	// Release returns true once at is due at now. Otherwise it returns how long Ring may sleep before asking again, at
-	// most WithPoll's d being slept, or 0 to ask again at once.
+	// Release returns true once at is due at now. Otherwise it returns how long Ring may sleep before asking again,
+	// capped by WithPoll, or 0 to ask again at once.
 	Release(at, now time.Time) (time.Duration, bool)
 }
 

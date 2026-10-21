@@ -15,8 +15,8 @@ var ErrClosed = errors.New("alarm closed")
 // ErrRinging is returned by Ring while another Ring or Chan of the same Alarm is under way.
 var ErrRinging = errors.New("alarm ringing")
 
-// Alarm calls a func, or sends on a channel, at each time of a sequence: Ring, or Chan. One Ring or Chan runs at a
-// time, which Reset, Close and Shutdown reach from any goroutine, fn included. Create one with New.
+// Alarm runs one Ring or Chan at a time, which Reset, Close and Shutdown reach from any goroutine, fn included.
+// Create one with New.
 type Alarm struct {
 	config
 
@@ -26,13 +26,13 @@ type Alarm struct {
 	ringing chan struct{}
 	// next is the sequence a Reset gave, until Ring takes it.
 	next iter.Seq[time.Time]
-	// ending is set once the Ring under way is to return, so that no Reset reaches it.
+	// ending is set once the Ring under way is to return: no Reset reaches it.
 	ending bool
 	// closed is closed by the first Close.
 	closed chan struct{}
-	// wake holds a token while next waits, to end the wait of fire.
+	// wake holds a token while next waits, to wake sleep.
 	wake chan struct{}
-	// interrupted is set by Reset and Close, so that each pass of fire sees them with a load rather than a lock.
+	// interrupted is set by Reset and Close, for fire to load at each pass rather than lock mu.
 	interrupted atomic.Bool
 
 	// The Ring under way owns these, kept for the next one.
@@ -49,12 +49,11 @@ func New(options ...Option) *Alarm {
 }
 
 // Ring calls fn with ctx and each time of times once due, in the calling goroutine, until times ends, ctx is done or
-// Close: neither fn nor its middlewares are called after. Lateness never adds up: each time is waited for itself, and
-// a passed one fires at once, unless middleware.MaxDelay drops it. A time is read once the last fired, unless
-// WithPuller reads it ahead. Reset replaces times meanwhile.
+// Close. Each time is waited for itself, so lateness never adds up and a passed time fires at once. A time is read
+// once the last fired, unless WithPuller reads it ahead.
 //
-// It returns nil once times ends, ctx.Err() once ctx is done, and ErrClosed after Close. It returns ErrRinging at once
-// while another Ring or Chan of a is under way.
+// It returns nil once times ends, ctx.Err() once ctx is done, ErrClosed after Close, and ErrRinging at once while
+// another Ring or Chan of a is under way.
 func (a *Alarm) Ring(ctx context.Context, times iter.Seq[time.Time], fn func(ctx context.Context, at time.Time)) error {
 	if err := a.start(); err != nil {
 		return err
@@ -72,9 +71,8 @@ func (a *Alarm) Ring(ctx context.Context, times iter.Seq[time.Time], fn func(ctx
 	}
 }
 
-// Chan is Ring sending each time on the returned channel from a goroutine of its own, and closing it after. A send
-// blocks until read, Close or its ctx is done, delaying later times, so a reader that stops early must Close or cancel
-// ctx. Where Ring returns an error at once, the channel closes at once.
+// Chan is Ring sending each time on the returned channel, from a goroutine of its own, and closing it once Ring
+// returns. A send blocks until read, delaying later times: a reader that stops early must Close or cancel ctx.
 func (a *Alarm) Chan(ctx context.Context, times iter.Seq[time.Time]) <-chan time.Time {
 	ch := make(chan time.Time)
 	go func() {
@@ -98,9 +96,9 @@ func (a *Alarm) Chan(ctx context.Context, times iter.Seq[time.Time]) <-chan time
 	return ch
 }
 
-// Reset makes the Ring or Chan under way drop the times it holds and read times instead, once fn returns if called:
-// times fired stay fired. A Reset as the sequence ends still takes. It reports whether a Ring was under way to take
-// times, and ignores a nil times.
+// Reset makes the Ring or Chan under way drop the times it holds and read times instead, once the fn call in progress
+// returns. It reports whether a Ring will read times: one whose sequence just ended still does. A nil times is
+// ignored.
 func (a *Alarm) Reset(times iter.Seq[time.Time]) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -118,8 +116,8 @@ func (a *Alarm) Reset(times iter.Seq[time.Time]) bool {
 	return true
 }
 
-// Close makes the Ring or Chan under way return once fn returns if called, and any later one return ErrClosed. It
-// never waits, so fn can call it. Every call after the first returns ErrClosed.
+// Close makes the Ring or Chan under way return once the fn call in progress does, and later ones return ErrClosed.
+// It never waits, so fn can call it. Every Close after the first returns ErrClosed.
 func (a *Alarm) Close() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -188,8 +186,8 @@ func (a *Alarm) ring(ctx context.Context, times iter.Seq[time.Time]) {
 	a.fire(ctx, false)
 }
 
-// fire fires the times held as the holder releases them. It returns true once none is held, or once the puller reads
-// the next, if read, and false once done, closed or reset.
+// fire fires the times held as the holder releases them. It returns true once none is held or, if read, the puller
+// asks for the next, and false once done, closed or reset.
 func (a *Alarm) fire(ctx context.Context, read bool) bool {
 	for a.pending.n > 0 {
 		at := a.pending.first()
@@ -246,8 +244,8 @@ func (a *Alarm) sleep(d time.Duration) bool {
 	return false
 }
 
-// take returns the sequence a Reset gave, once ring returned, dropping the times held. Otherwise it returns nil and
-// Ring's error, after which no Reset reaches this Ring.
+// take returns the sequence a Reset gave, dropping the times held, or else nil and Ring's error, after which no Reset
+// reaches this Ring.
 func (a *Alarm) take(ctx context.Context) (iter.Seq[time.Time], error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

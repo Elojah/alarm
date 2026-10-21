@@ -5,15 +5,14 @@
 //	a := alarm.New()
 //	err = a.Ring(ctx, set.Between(time.Now(), time.Time{}), func(ctx context.Context, at time.Time) { ... })
 //
-// Times are read one at a time, once the last fired, unless a Puller reads them ahead (WithPuller), so a sequence can
-// be endless, and nothing is allocated per time. Each is waited for itself, not as a gap from the last, so a passed
-// time fires at once: start the sequence at now, or drop it with middleware.MaxDelay. A wait polls the clock at least
-// once a minute, or as WithPoll sets, so a clock step or a suspend shows within it.
+// Times are read one at a time, so a sequence can be endless, and nothing is allocated per time. Each is waited for
+// itself, not as a gap from the last: lateness never adds up, and a passed time fires at once, so start the sequence
+// at now, or drop passed times with middleware.MaxDelay.
 //
-// From any goroutine, fn included, Reset replaces the sequence of the Ring under way, Close stops it without waiting,
-// and Shutdown stops it and waits until it returns.
+// Reset replaces the sequence of the Ring under way, Close stops it, and Shutdown stops it and waits until it returns,
+// from any goroutine, fn included.
 //
-// A Holder decides when each time is due (WithHolder), a Puller when it is read (WithPuller), and Middleware wraps fn
-// (WithMiddleware). Packages holder, puller and middleware hold ready-made ones. On Linux a timer fires up to a
-// millisecond late: holder.NewSpin busy-waits the end of each wait instead, to the microsecond, at the cost of a core.
+// A Holder decides when each time is due, a Puller when it is read, and a Middleware wraps fn. Packages holder, puller
+// and middleware hold ready-made ones: holder.NewSpin fires to the microsecond, where a timer is up to a millisecond
+// late on Linux, at the cost of a core.
 package alarm

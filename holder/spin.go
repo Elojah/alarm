@@ -2,9 +2,9 @@ package holder
 
 import "time"
 
-// Spin is an alarm.Holder that busy-waits for the last d before each time, instead of leaving it to the timer, which
-// fires up to a millisecond late on Linux. It takes a core for up to d per time. Under TinyGo no other goroutine runs
-// meanwhile, and in a synctest bubble it never ends. Create one with NewSpin.
+// Spin is an alarm.Holder that busy-waits the last d before each time, where a timer fires up to a millisecond late on
+// Linux. It takes a core for up to d per time. Under TinyGo no other goroutine runs meanwhile, and in a synctest bubble
+// it never ends. Create one with NewSpin.
 type Spin struct {
 	d time.Duration
 }
@@ -15,7 +15,7 @@ func NewSpin(d time.Duration) Spin {
 }
 
 // Release returns true once at is due at now. Otherwise it returns how long until the last d before at, or 0 within
-// it, so that Ring asks again at once.
+// it.
 func (s Spin) Release(at, now time.Time) (time.Duration, bool) {
 	d := at.Sub(now)
 	if d <= 0 {

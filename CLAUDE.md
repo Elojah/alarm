@@ -8,9 +8,10 @@ package's. Go 1.26.1, no dependency. Behaviour is in godoc and the README, plans
 
 - `doc.go`: the package doc. `alarm.go`: `Alarm`, `New`, `Ring`, `Chan`, `Reset`, `Close` and `Shutdown`, and `fire`,
   which waits for and fires each time, and returns to the sequence when the puller reads the next, with `sleep`, which
-  waits on the timer. `pending.go`: the ring of times read, not fired yet. `option.go`: the options and `config`. `holder.go`: `Holder` and the default, `onTime`. `puller.go`:
-  `Puller` and the default, `lazy`. `middleware.go`: `Handler`, `Middleware` and `chain`.
-  `bench_test.go`: the cost of a time, with a Reset per time too, and how late times fire on the real clock.
+  waits on the timer. `pending.go`: the ring of times read, not fired yet. `option.go`: the options and `config`.
+  `holder.go`: `Holder` and the default, `onTime`. `puller.go`: `Puller` and the default, `lazy`. `middleware.go`:
+  `Handler`, `Middleware` and `chain`. `bench_test.go`: the cost of a time, with a Reset per time too, and how late
+  times fire on the real clock. `assets/logo.svg`: the README's logo, an alarm clock whose face is a sequence.
 - `holder/`, `puller/` and `middleware/` hold ready-made ones, as `../multicast` does. `middleware` imports `alarm` for
   its types, `holder` and `puller` nothing from it: they are matched by their method.
 

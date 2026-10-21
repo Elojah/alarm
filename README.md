@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="alarm" width="180">
+</p>
+
 # alarm
 
 [![CI](https://github.com/Elojah/alarm/actions/workflows/ci.yml/badge.svg)](https://github.com/Elojah/alarm/actions/workflows/ci.yml)
@@ -42,37 +46,38 @@ err = a.Ring(ctx, set.Between(time.Now(), time.Time{}), func(ctx context.Context
 
 | Ready-made | Does |
 | --- | --- |
-| `holder.NewSpin(d)` | Busy-waits for the last `d` before each time, instead of leaving it to the timer. |
-| `middleware.MaxDelay(d)` | Drops a time passed by more than `d`, instead of firing it late. |
+| `holder.NewSpin(d)` | Busy-waits the last `d` before each time, rather than leaving it to the timer. |
+| `middleware.MaxDelay(d)` | Drops a time passed by more than `d`, rather than firing it late. |
 | `puller.NewAhead(n)` | Holds `n` times read ahead of the one waited for. |
-| `puller.NewHorizon(d, n)` | Reads the next time once the last read is due within `d`, at most `n` ahead; `n <= 0` means any number. |
+| `puller.NewHorizon(d, n)` | Reads each time once it is due within `d`, at most `n` ahead; `n <= 0` means any number. |
 
 ## Time
 
-Each time is waited for itself, not as a gap from the last, so lateness never adds up and a passed time fires at once:
-start a set at now with `Between`, or drop it with `middleware.MaxDelay`. A wait polls the clock at least once a
-minute, or as `WithPoll` sets, so a clock step or a suspend shows within it.
+Each time is waited for itself, not as a gap from the last: lateness never adds up, and a passed time fires at once.
+Start a set at now with `Between`, or drop passed times with `middleware.MaxDelay`. A wait polls the clock at least
+once a minute (`WithPoll`), so a clock step or a suspend shows within it.
 
 ## Stopping and changing the sequence
 
-`Reset`, `Close` and `Shutdown` reach the Ring under way from any goroutine, `fn` included, once the `fn` call in
-progress returns. `Reset` drops the times read and not fired yet, and reads the new sequence at once, such as a rule
-edited while it rings. `Close` stops the Ring without waiting, so `fn` can call it, and `Shutdown` waits until it
-returns, or until its own `ctx` is done. Neither cancels `fn`'s `ctx`: cancel Ring's to interrupt `fn`. `fn` can
-Reset at each time to the next it computes. An Alarm rings one sequence at a time, and
-rings again once a Ring returned, until closed.
+An Alarm rings one sequence at a time. `Reset`, `Close` and `Shutdown` reach the Ring under way from any goroutine,
+`fn` included, once the `fn` call in progress returns:
+
+- `Reset` drops the times held and reads the new sequence, such as a rule edited while it rings. `fn` can Reset to the
+  next time it computes.
+- `Close` stops the Ring without waiting, so `fn` can call it. `Shutdown` also waits until it returns, or its `ctx` is
+  done.
+
+Neither cancels `fn`'s `ctx`: cancel Ring's to interrupt `fn`.
 
 ## Reading ahead
 
-A time is read once the last fired, so a slow sequence, such as one read from a store, takes its time from the wait
-of the next. `WithPuller` reads times ahead, while Ring waits: `puller.NewHorizon(time.Minute, 1000)` reads each time a
-minute before it, holding at most 1000. Ring reads in its own goroutine, so a read still keeps it from the time it waits
-for: it reads none while that time is due or a `holder.NewSpin` spins, and wakes for a read when the puller says, not
-only at a poll. Times held cost no allocation once the buffer holding them has grown.
+A time is read once the last fired, so a slow sequence, such as one read from a store, delays the next. `WithPuller`
+reads ahead while Ring waits: `puller.NewHorizon(time.Minute, 1000)` reads each time a minute before it, at most 1000
+held. A read still blocks Ring, so none happens while a time is due or a spin runs.
 
 ## Precision
 
-On Linux a timer fires up to a millisecond late. `holder.NewSpin` wakes Ring earlier and busy-waits the rest, taking a
+On Linux a timer fires up to a millisecond late. `holder.NewSpin` busy-waits the end of each wait instead, taking a
 core while it does.
 
 Intel Core Ultra 5 226V, GOMAXPROCS 8 (`make bench`):

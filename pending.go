@@ -2,8 +2,8 @@ package alarm
 
 import "time"
 
-// pending holds the times read and not fired yet, first in first out, in a ring that grows to the most held at once and
-// is then reused, so that none is allocated per time.
+// pending is a FIFO ring of the times read, not fired yet, grown to the most held at once and then reused: no
+// allocation per time.
 type pending struct {
 	times []time.Time
 	head  int
