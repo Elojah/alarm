@@ -1,6 +1,7 @@
 package alarm_test
 
 import (
+	"context"
 	"fmt"
 	"iter"
 	"slices"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/elojah/alarm"
+	"github.com/elojah/alarm/holder"
 )
 
 // passed yields a passed time per b.Loop iteration.
@@ -27,7 +29,7 @@ func passed(b *testing.B) iter.Seq[time.Time] {
 
 // Run's cost per time, without waiting.
 func BenchmarkRun_Passed(b *testing.B) {
-	_ = alarm.Run(b.Context(), passed(b), func(time.Time) {})
+	_ = alarm.Run(b.Context(), passed(b), func(context.Context, time.Time) {})
 }
 
 // Chan's cost per time, without waiting: a handoff to the reader.
@@ -41,7 +43,7 @@ func BenchmarkRun_Late(b *testing.B) {
 	for _, period := range []time.Duration{time.Millisecond, 10 * time.Millisecond} {
 		for _, spin := range []time.Duration{0, time.Millisecond, 2 * time.Millisecond} {
 			b.Run(fmt.Sprintf("every=%v/spin=%v", period, spin), func(b *testing.B) {
-				late(b, period, alarm.WithSpin(spin))
+				late(b, period, alarm.WithHolder(holder.NewSpin(spin)))
 			})
 		}
 	}
@@ -62,7 +64,9 @@ func late(b *testing.B, period time.Duration, options ...alarm.Option) {
 			}
 		}
 	}
-	_ = alarm.Run(b.Context(), times, func(at time.Time) { lates = append(lates, time.Since(at)) }, options...)
+	_ = alarm.Run(b.Context(), times, func(_ context.Context, at time.Time) {
+		lates = append(lates, time.Since(at))
+	}, options...)
 
 	slices.Sort(lates)
 	for _, q := range []struct {

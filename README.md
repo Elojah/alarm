@@ -18,31 +18,37 @@ if err != nil {
 	return err
 }
 
-err = alarm.Run(ctx, set.Between(time.Now(), time.Time{}), func(at time.Time) {
+err = alarm.Run(ctx, set.Between(time.Now(), time.Time{}), func(ctx context.Context, at time.Time) {
 	fmt.Println("fired", at)
-}, alarm.WithSpin(time.Millisecond))
+}, alarm.WithHolder(holder.NewSpin(time.Millisecond)))
 ```
 
 | Function | Does |
 | --- | --- |
-| `Run(ctx, times, fn, ...Option)` | Calls `fn` with each time once the clock shows it, in the calling goroutine, until `times` ends or `ctx` is done. |
+| `Run(ctx, times, fn, ...Option)` | Calls `fn` with `ctx` and each time once due, in the calling goroutine, until `times` ends or `ctx` is done. |
 | `Chan(ctx, times, ...Option)` | The same, sending on the returned channel from its own goroutine. |
 
 | Option | Does |
 | --- | --- |
-| `WithMaxDelay(d)` | Drops a time passed by more than `d`, instead of firing it late. |
-| `WithSpin(d)` | Busy-waits for the last `d` before each time, instead of leaving it to the timer. |
+| `WithHolder(h)` | Lets `h` decide when each time is due, rather than once the clock shows it. |
+| `WithMiddleware(m...)` | Wraps `fn`, or Chan's send, in `m`, the first one outermost. |
+| `WithPoll(d)` | Polls the clock at least every `d` while waiting, a minute by default; `d <= 0` means never. |
+
+| Ready-made | Does |
+| --- | --- |
+| `holder.NewSpin(d)` | Busy-waits for the last `d` before each time, instead of leaving it to the timer. |
+| `middleware.MaxDelay(d)` | Drops a time passed by more than `d`, instead of firing it late. |
 
 ## Time
 
 Each time is waited for itself, not as a gap from the last, so lateness never adds up and a passed time fires at once:
-start a set at now with `Between`, or set `WithMaxDelay`. A wait reads the wall clock again at least once a minute, so a
-clock step or a suspend shows within it.
+start a set at now with `Between`, or drop it with `middleware.MaxDelay`. A wait polls the clock at least once a
+minute, or as `WithPoll` sets, so a clock step or a suspend shows within it.
 
 ## Precision
 
-On Linux a timer fires up to a millisecond late. `WithSpin` wakes Run earlier and busy-waits the rest, taking a core
-while it does.
+On Linux a timer fires up to a millisecond late. `holder.NewSpin` wakes Run earlier and busy-waits the rest, taking a
+core while it does.
 
 Intel Core Ultra 5 226V, GOMAXPROCS 8 (`make bench`):
 
@@ -62,8 +68,9 @@ Run one with `go run ./examples/01-run`.
 
 | Example | Shows |
 | --- | --- |
-| [`01-run`](examples/01-run/main.go) | Pulses from an iterator, with `Run` and `WithSpin`. |
+| [`01-run`](examples/01-run/main.go) | Pulses from an iterator, with `Run` and `holder.NewSpin`. |
 | [`02-chan`](examples/02-chan/main.go) | Times from a slice, received from `Chan`. |
+| [`03-max-delay`](examples/03-max-delay/main.go) | A passed time dropped by `middleware.MaxDelay`. |
 
 ## Development
 

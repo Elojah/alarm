@@ -1,4 +1,4 @@
-// Five pulses 100ms apart, from an iterator, with Run and WithSpin.
+// Five pulses 100ms apart, from an iterator, with Run and holder.NewSpin.
 package main
 
 import (
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/elojah/alarm"
+	"github.com/elojah/alarm/holder"
 )
 
 func main() {
@@ -20,9 +21,9 @@ func main() {
 		}
 	}
 
-	err := alarm.Run(context.Background(), pulses, func(at time.Time) {
+	err := alarm.Run(context.Background(), pulses, func(_ context.Context, at time.Time) {
 		fmt.Println("pulse at", at.Sub(start))
-	}, alarm.WithSpin(time.Millisecond))
+	}, alarm.WithHolder(holder.NewSpin(time.Millisecond)))
 	if err != nil {
 		log.Fatal(err)
 	}

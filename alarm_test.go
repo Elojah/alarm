@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/elojah/alarm"
+	"github.com/elojah/alarm/holder"
+	"github.com/elojah/alarm/middleware"
 )
 
 // call is a time fired and when, both from start.
@@ -27,8 +29,8 @@ func after(start time.Time, ds ...time.Duration) []time.Time {
 }
 
 // record appends each call to calls, then sleeps for the next of sleeps, if any.
-func record(start time.Time, calls *[]call, sleeps ...time.Duration) func(time.Time) {
-	return func(at time.Time) {
+func record(start time.Time, calls *[]call, sleeps ...time.Duration) func(context.Context, time.Time) {
+	return func(_ context.Context, at time.Time) {
 		*calls = append(*calls, call{at: at.Sub(start), now: time.Since(start)})
 		if len(sleeps) > 0 {
 			time.Sleep(sleeps[0])
@@ -37,7 +39,7 @@ func record(start time.Time, calls *[]call, sleeps ...time.Duration) func(time.T
 	}
 }
 
-// Times fire on time, even past maxSleep.
+// Times fire on time, even past a poll.
 func TestRun(t *testing.T) {
 	t.Parallel()
 
@@ -109,7 +111,7 @@ func TestRun_Cancel(t *testing.T) {
 			start := time.Now()
 			ctx, cancel := context.WithCancel(t.Context())
 			calls := 0
-			err := alarm.Run(ctx, slices.Values(after(start, -2*time.Millisecond, -time.Millisecond, 0)), func(time.Time) {
+			err := alarm.Run(ctx, slices.Values(after(start, -2*time.Millisecond, -time.Millisecond, 0)), func(context.Context, time.Time) {
 				calls++
 				cancel()
 			})
@@ -123,8 +125,145 @@ func TestRun_Cancel(t *testing.T) {
 	})
 }
 
+// fn gets Run's ctx.
+func TestRun_Context(t *testing.T) {
+	t.Parallel()
+
+	type key struct{}
+	ctx := context.WithValue(t.Context(), key{}, "run")
+	calls := 0
+	err := alarm.Run(ctx, slices.Values(after(time.Now(), -time.Millisecond)), func(ctx context.Context, _ time.Time) {
+		calls++
+		if got := ctx.Value(key{}); got != "run" {
+			t.Errorf("got %v, want run", got)
+		}
+	})
+	if err != nil {
+		t.Errorf("got %v, want nil", err)
+	}
+	if calls != 1 {
+		t.Errorf("got %d calls, want 1", calls)
+	}
+}
+
+// Middlewares wrap fn, the first one outermost, nil ones skipped, and the ctx one hands down reaches fn.
+func TestWithMiddleware(t *testing.T) {
+	t.Parallel()
+
+	type key struct{}
+	var calls []string
+	mark := func(name string) alarm.Middleware {
+		return func(next alarm.Handler) alarm.Handler {
+			return func(ctx context.Context, at time.Time) {
+				calls = append(calls, name)
+				next(context.WithValue(ctx, key{}, name), at)
+			}
+		}
+	}
+	err := alarm.Run(t.Context(), slices.Values(after(time.Now(), -time.Millisecond)), func(ctx context.Context, _ time.Time) {
+		name, _ := ctx.Value(key{}).(string)
+		calls = append(calls, "fn from "+name)
+	}, alarm.WithMiddleware(mark("a"), nil), alarm.WithMiddleware(mark("b")))
+	if err != nil {
+		t.Errorf("got %v, want nil", err)
+	}
+	if want := []string{"a", "b", "fn from b"}; !slices.Equal(calls, want) {
+		t.Errorf("got %v, want %v", calls, want)
+	}
+}
+
+// early is a Holder releasing each time a millisecond before it.
+type early struct{}
+
+func (early) Release(at, now time.Time) (time.Duration, bool) {
+	if d := at.Sub(now) - time.Millisecond; d > 0 {
+		return d, false
+	}
+
+	return 0, true
+}
+
+// A holder decides when each time is due, and a nil one keeps the default.
+func TestWithHolder(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		holder alarm.Holder
+		want   []call
+	}{
+		{"Early", early{}, []call{{2 * time.Millisecond, time.Millisecond}, {5 * time.Millisecond, 4 * time.Millisecond}}},
+		{"Nil", nil, []call{{2 * time.Millisecond, 2 * time.Millisecond}, {5 * time.Millisecond, 5 * time.Millisecond}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				start := time.Now()
+				var calls []call
+				err := alarm.Run(t.Context(), slices.Values(after(start, 2*time.Millisecond, 5*time.Millisecond)),
+					record(start, &calls), alarm.WithHolder(test.holder))
+				if err != nil {
+					t.Errorf("got %v, want nil", err)
+				}
+				if !slices.Equal(calls, test.want) {
+					t.Errorf("got %v, want %v", calls, test.want)
+				}
+			})
+		})
+	}
+}
+
+// asks records when Run asks it, from start, answering as the default holder does.
+type asks struct {
+	start time.Time
+	nows  []time.Duration
+}
+
+func (a *asks) Release(at, now time.Time) (time.Duration, bool) {
+	a.nows = append(a.nows, now.Sub(a.start))
+	if d := at.Sub(now); d > 0 {
+		return d, false
+	}
+
+	return 0, true
+}
+
+// Run polls the holder at least every d while it waits, a minute by default, and with d <= 0 only once due.
+func TestWithPoll(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		options []alarm.Option
+		at      time.Duration
+		want    []time.Duration
+	}{
+		{"Default", nil, 150 * time.Second, []time.Duration{0, time.Minute, 2 * time.Minute, 150 * time.Second}},
+		{"Second", []alarm.Option{alarm.WithPoll(time.Second)}, 2500 * time.Millisecond, []time.Duration{0, time.Second, 2 * time.Second, 2500 * time.Millisecond}},
+		{"Zero", []alarm.Option{alarm.WithPoll(0)}, 150 * time.Second, []time.Duration{0, 150 * time.Second}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				start := time.Now()
+				h := &asks{start: start}
+				err := alarm.Run(t.Context(), slices.Values(after(start, test.at)), func(context.Context, time.Time) {},
+					append([]alarm.Option{alarm.WithHolder(h)}, test.options...)...)
+				if err != nil {
+					t.Errorf("got %v, want nil", err)
+				}
+				if !slices.Equal(h.nows, test.want) {
+					t.Errorf("got asked at %v, want %v", h.nows, test.want)
+				}
+			})
+		})
+	}
+}
+
 // A time passed by more than the max delay is dropped.
-func TestWithMaxDelay(t *testing.T) {
+func TestMiddlewareMaxDelay(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -132,7 +271,7 @@ func TestWithMaxDelay(t *testing.T) {
 		var calls []call
 		times := after(start, -time.Hour, time.Millisecond, 2*time.Millisecond, 3*time.Millisecond, 4*time.Millisecond)
 		err := alarm.Run(t.Context(), slices.Values(times), record(start, &calls, 2500*time.Microsecond),
-			alarm.WithMaxDelay(time.Millisecond))
+			alarm.WithMiddleware(middleware.MaxDelay(time.Millisecond)))
 		if err != nil {
 			t.Errorf("got %v, want nil", err)
 		}
@@ -145,7 +284,7 @@ func TestWithMaxDelay(t *testing.T) {
 }
 
 // A spin never fires early, and stops once ctx is done. On the real clock: a spin never ends in a bubble.
-func TestWithSpin(t *testing.T) {
+func TestHolderSpin(t *testing.T) {
 	t.Parallel()
 
 	t.Run("Fire", func(t *testing.T) {
@@ -153,12 +292,12 @@ func TestWithSpin(t *testing.T) {
 
 		times := after(time.Now(), -time.Millisecond, time.Millisecond, 2*time.Millisecond, 5*time.Millisecond)
 		calls := 0
-		err := alarm.Run(t.Context(), slices.Values(times), func(at time.Time) {
+		err := alarm.Run(t.Context(), slices.Values(times), func(_ context.Context, at time.Time) {
 			calls++
 			if now := time.Now(); now.Before(at) {
 				t.Errorf("fired %v early", at.Sub(now))
 			}
-		}, alarm.WithSpin(2*time.Millisecond))
+		}, alarm.WithHolder(holder.NewSpin(2*time.Millisecond)))
 		if err != nil {
 			t.Errorf("got %v, want nil", err)
 		}
@@ -171,8 +310,8 @@ func TestWithSpin(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond)
 		defer cancel()
-		err := alarm.Run(ctx, slices.Values(after(time.Now(), time.Hour)), func(time.Time) { t.Error("called") },
-			alarm.WithSpin(2*time.Hour))
+		err := alarm.Run(ctx, slices.Values(after(time.Now(), time.Hour)), func(context.Context, time.Time) { t.Error("called") },
+			alarm.WithHolder(holder.NewSpin(2*time.Hour)))
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("got %v, want %v", err, context.DeadlineExceeded)
 		}

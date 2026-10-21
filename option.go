@@ -8,32 +8,45 @@ import (
 // Option configures Run and Chan.
 type Option func(c *config)
 
-// WithMaxDelay drops a time passed by more than d when reached, instead of firing it late. Keep d above the timer's
-// resolution, a millisecond on Linux.
-func WithMaxDelay(d time.Duration) Option {
+// WithHolder makes h decide when each time is due, rather than once the clock shows it. Give each Run its own. A nil h
+// is ignored.
+func WithHolder(h Holder) Option {
 	return func(c *config) {
-		c.maxDelay = d
+		if h != nil {
+			c.holder = h
+		}
 	}
 }
 
-// WithSpin busy-waits for the last d before each time, instead of leaving it to the timer, which fires up to a
-// millisecond late on Linux. It takes a core for up to d per time. Under TinyGo no other goroutine runs meanwhile, and
-// in a synctest bubble it never ends.
-func WithSpin(d time.Duration) Option {
+// WithMiddleware appends middlewares around fn, or Chan's send, the first one outermost.
+func WithMiddleware(middlewares ...Middleware) Option {
 	return func(c *config) {
-		c.spin = d
+		c.middlewares = append(c.middlewares, middlewares...)
+	}
+}
+
+// WithPoll makes Run poll the clock at least every d while it waits, a minute by default, so that a wall clock step or
+// a suspend shows within d: timers run on the monotonic clock. d <= 0 means never.
+func WithPoll(d time.Duration) Option {
+	return func(c *config) {
+		if d <= 0 {
+			d = math.MaxInt64
+		}
+		c.poll = d
 	}
 }
 
 // config is what options set.
 type config struct {
-	maxDelay time.Duration
-	spin     time.Duration
+	holder      Holder
+	middlewares []Middleware
+	// poll is above 0, so that a sleep it bounds still is one.
+	poll time.Duration
 }
 
 // newConfig applies options over the defaults.
 func newConfig(options []Option) config {
-	c := config{maxDelay: math.MaxInt64}
+	c := config{holder: onTime{}, poll: time.Minute}
 	for _, option := range options {
 		option(&c)
 	}
