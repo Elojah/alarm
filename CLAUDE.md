@@ -14,6 +14,8 @@ package's. Go 1.26.1, no dependency. Behaviour is in godoc and the README, plans
   times fire on the real clock. `assets/logo.svg`: the README's logo, an alarm clock whose face is a sequence.
 - `holder/`, `puller/` and `middleware/` hold ready-made ones, as `../multicast` does. `middleware` imports `alarm` for
   its types, `holder` and `puller` nothing from it: they are matched by their method.
+- `examples/07-gateway` and `08-adaptive` use rrule and multicast, so they are modules of their own (`replace ../..`),
+  which keeps go.mod free of dependencies. `go test ./...` skips them, `make` covers them (`MODULES`), TinyGo included.
 
 ## Commands
 
@@ -83,4 +85,6 @@ golangci-lint in `./bin`.
   time fires early, and ctx stops a spin.
 - `testing/synctest` does not link with TinyGo, so `make tinygo` runs and builds the examples only.
 - Each example under `examples/` has an `Example()` with `// Output:`, which must not depend on scheduling: it prints
-  the times fired, not when. `tinygo-run` diffs `tinygo run`'s output with it.
+  the times fired, not when. `tinygo-run` diffs `tinygo run`'s output with it. A subscriber's goroutine prints nothing
+  while Ring runs: the fakes keep lines, printed once Shutdown returns. Go runs an Example once whatever `-count`, so
+  repeat one with its test binary (`go test -race -c`).

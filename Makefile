@@ -1,6 +1,10 @@
 GO                 = go
 GOFMT              = gofmt
 
+# The modules tidy, lint and test cover. Examples that use rrule or multicast are modules, so the library's go.mod
+# lists no dependency.
+MODULES            = . $(patsubst %/go.mod,%,$(wildcard examples/*/go.mod))
+
 TINYGO             = tinygo
 TINYGO_TARGET     ?= pico
 EXAMPLES           = $(patsubst %/,%,$(wildcard examples/*/))
@@ -25,7 +29,7 @@ all: check
 .PHONY: tidy
 tidy: ## Run go mod tidy
 	$(info $(M) running go mod tidy) @
-	$Q $(GO) mod tidy
+	$Q for m in $(MODULES); do (cd $$m && $(GO) mod tidy) || exit 1; done
 
 # Check
 .PHONY: check
@@ -35,14 +39,14 @@ check: lint test ## Run lint and tests
 .PHONY: lint
 lint: ## Run golangci-lint
 	$(info $(M) running $(GOLINT))
-	$Q $(GOLINT) run
+	$Q for m in $(MODULES); do (cd $$m && $(GOLINT) run) || exit 1; done
 
 # Test
 .PHONY: test
 # -cpu 1,4 varies interleavings, -shuffle catches tests that depend on each other.
 test: ## Run tests with race detector, shuffled, with GOMAXPROCS 1 and 4
 	$(info $(M) running go test) @
-	$Q $(GO) test -cover -race -shuffle=on -cpu 1,4 -v ./...
+	$Q for m in $(MODULES); do (cd $$m && $(GO) test -cover -race -shuffle=on -cpu 1,4 -v ./...) || exit 1; done
 
 # Bench
 .PHONY: bench
@@ -52,7 +56,8 @@ bench: ## Run the benchmarks: the cost of a time, and how late times fire
 	$Q $(GO) test -run '^$$' -bench . -benchmem ./...
 
 # TinyGo
-# testing/synctest does not link with TinyGo, and tinygo test runs no Example: the examples are run and diffed instead.
+# testing/synctest does not link with TinyGo, and tinygo test runs no Example: the examples are run and diffed instead,
+# each from its own directory, so that a module's go.mod applies.
 .PHONY: tinygo
 tinygo: tinygo-run tinygo-build ## Run tinygo-run and tinygo-build
 
@@ -64,7 +69,7 @@ tinygo-run: ## Run each example with TinyGo, and diff what it prints with its Ex
 	for e in $(EXAMPLES); do \
 		echo "$(M) $$e"; \
 		$(EXAMPLE_OUTPUT) $$e/main_test.go > "$$out/want"; \
-		$(TINYGO) run ./$$e > "$$out/got"; \
+		(cd $$e && $(TINYGO) run .) > "$$out/got"; \
 		diff -u "$$out/want" "$$out/got"; \
 	done
 
@@ -76,7 +81,7 @@ tinygo-build: ## Build each example with TinyGo for TINYGO_TARGET (pico), withou
 	out=$$(mktemp -d); trap 'rm -rf "$$out"' EXIT; \
 	for e in $(EXAMPLES); do \
 		echo "$(M) $$e"; \
-		$(TINYGO) build -target=$(TINYGO_TARGET) -size short -o "$$out/main.elf" ./$$e; \
+		(cd $$e && $(TINYGO) build -target=$(TINYGO_TARGET) -size short -o "$$out/main.elf" .); \
 	done
 
 ## Helpers

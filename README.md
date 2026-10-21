@@ -104,6 +104,11 @@ Run one with `go run ./examples/01-ring`.
 | [`04-horizon`](examples/04-horizon/main.go) | Times read ahead by `puller.NewHorizon`. |
 | [`05-reset`](examples/05-reset/main.go) | An endless sequence replaced from `fn` by `Reset`. |
 | [`06-shutdown`](examples/06-shutdown/main.go) | Times received from `Chan` until the reader calls `Shutdown`. |
+| [`07-gateway`](examples/07-gateway/main.go) | A probe polled every 10ms by an rrule set, each reading fanned out by [multicast](https://github.com/elojah/multicast) to a local store and a cloud API. |
+| [`08-adaptive`](examples/08-adaptive/main.go) | A pump sampled every 100ms while idle and every 10ms while running, switching rules with `Reset`. |
+
+`07-gateway` and `08-adaptive` are modules of their own, to keep rrule and multicast out of the library's go.mod:
+`go run -C examples/07-gateway .`. Their device, store and cloud are interfaces, faked in `fake.go`.
 
 ## Development
 

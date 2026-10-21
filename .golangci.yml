@@ -143,6 +143,9 @@ linters:
       line-length: 180
     cyclop:
       max-complexity: 30
+    gomoddirectives:
+      # Modules nested in this one, such as examples/07-gateway, build against the working tree.
+      replace-local: true
   exclusions:
     generated: lax
     warn-unused: true
