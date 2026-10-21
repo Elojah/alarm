@@ -3,6 +3,7 @@ package alarm_test
 import (
 	"context"
 	"errors"
+	"iter"
 	"slices"
 	"testing"
 	"testing/synctest"
@@ -11,6 +12,7 @@ import (
 	"github.com/elojah/alarm"
 	"github.com/elojah/alarm/holder"
 	"github.com/elojah/alarm/middleware"
+	"github.com/elojah/alarm/puller"
 )
 
 // call is a time fired and when, both from start.
@@ -36,6 +38,31 @@ func record(start time.Time, calls *[]call, sleeps ...time.Duration) func(contex
 			time.Sleep(sleeps[0])
 			sleeps = sleeps[1:]
 		}
+	}
+}
+
+// event is a time read from the sequence or fired, and when, both from start.
+type event struct {
+	op      string
+	at, now time.Duration
+}
+
+// reading yields start plus each of ds, logging each read to events.
+func reading(start time.Time, events *[]event, ds ...time.Duration) iter.Seq[time.Time] {
+	return func(yield func(time.Time) bool) {
+		for _, d := range ds {
+			*events = append(*events, event{op: "read", at: d, now: time.Since(start)})
+			if !yield(start.Add(d)) {
+				return
+			}
+		}
+	}
+}
+
+// firing logs each time fired to events.
+func firing(start time.Time, events *[]event) func(context.Context, time.Time) {
+	return func(_ context.Context, at time.Time) {
+		*events = append(*events, event{op: "fire", at: at.Sub(start), now: time.Since(start)})
 	}
 }
 
@@ -83,7 +110,7 @@ func TestRun_Late(t *testing.T) {
 	})
 }
 
-// Run stops once ctx is done, while waiting or firing passed times.
+// Run stops once ctx is done, while waiting, firing passed times, or with times held once the sequence ended.
 func TestRun_Cancel(t *testing.T) {
 	t.Parallel()
 
@@ -120,6 +147,24 @@ func TestRun_Cancel(t *testing.T) {
 			}
 			if calls != 1 {
 				t.Errorf("got %d calls, want 1", calls)
+			}
+		})
+	})
+	t.Run("Held", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Millisecond)
+			defer cancel()
+			var calls []call
+			err := alarm.Run(ctx, slices.Values(after(start, time.Millisecond, time.Hour, 2*time.Hour)), record(start, &calls),
+				alarm.WithPuller(puller.NewAhead(5)))
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("got %v, want %v", err, context.DeadlineExceeded)
+			}
+			if want := []call{{time.Millisecond, time.Millisecond}}; !slices.Equal(calls, want) || time.Since(start) != 2*time.Millisecond {
+				t.Errorf("got %v at %v, want %v at 2ms", calls, time.Since(start), want)
 			}
 		})
 	})
@@ -262,6 +307,80 @@ func TestWithPoll(t *testing.T) {
 	}
 }
 
+// ask is when Run asked a Puller, from start, with how many times held ahead and the last read.
+type ask struct {
+	ahead     int
+	last, now time.Duration
+}
+
+// asksEveryMillisecond records when Run asks it, reading none ahead and asking to be asked again in a millisecond.
+type asksEveryMillisecond struct {
+	start time.Time
+	asks  []ask
+}
+
+func (a *asksEveryMillisecond) Pull(ahead int, last, now time.Time) (time.Duration, bool) {
+	a.asks = append(a.asks, ask{ahead: ahead, last: last.Sub(a.start), now: now.Sub(a.start)})
+
+	return time.Millisecond, false
+}
+
+// Run reads a time once it fired the last by default, and asks a puller while it waits, once its wait ends and once a
+// time fired.
+func TestWithPuller(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Nil", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var events []event
+			err := alarm.Run(t.Context(), reading(start, &events, time.Millisecond, 2*time.Millisecond), firing(start, &events),
+				alarm.WithPuller(nil))
+			if err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			want := []event{
+				{"read", time.Millisecond, 0},
+				{"fire", time.Millisecond, time.Millisecond},
+				{"read", 2 * time.Millisecond, time.Millisecond},
+				{"fire", 2 * time.Millisecond, 2 * time.Millisecond},
+			}
+			if !slices.Equal(events, want) {
+				t.Errorf("got %v, want %v", events, want)
+			}
+		})
+	})
+	t.Run("Asks", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			p := &asksEveryMillisecond{start: start}
+			var calls []call
+			err := alarm.Run(t.Context(), slices.Values(after(start, 2500*time.Microsecond, 3*time.Millisecond)), record(start, &calls),
+				alarm.WithPuller(p))
+			if err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			wantAsks := []ask{
+				{0, 2500 * time.Microsecond, 0},
+				{0, 2500 * time.Microsecond, time.Millisecond},
+				{0, 2500 * time.Microsecond, 2 * time.Millisecond},
+				{0, 3 * time.Millisecond, 2500 * time.Microsecond},
+			}
+			if !slices.Equal(p.asks, wantAsks) {
+				t.Errorf("got asks %v, want %v", p.asks, wantAsks)
+			}
+			want := []call{{2500 * time.Microsecond, 2500 * time.Microsecond}, {3 * time.Millisecond, 3 * time.Millisecond}}
+			if !slices.Equal(calls, want) {
+				t.Errorf("got %v, want %v", calls, want)
+			}
+		})
+	})
+}
+
 // A time passed by more than the max delay is dropped.
 func TestMiddlewareMaxDelay(t *testing.T) {
 	t.Parallel()
@@ -316,6 +435,87 @@ func TestHolderSpin(t *testing.T) {
 			t.Errorf("got %v, want %v", err, context.DeadlineExceeded)
 		}
 	})
+}
+
+// Run holds n times read ahead, and reads none while one is due.
+func TestPullerAhead(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		var events []event
+		times := reading(start, &events, -time.Millisecond, time.Millisecond, 2*time.Millisecond, 3*time.Millisecond)
+		err := alarm.Run(t.Context(), times, firing(start, &events), alarm.WithPuller(puller.NewAhead(1)))
+		if err != nil {
+			t.Errorf("got %v, want nil", err)
+		}
+		want := []event{
+			{"read", -time.Millisecond, 0},
+			{"fire", -time.Millisecond, 0},
+			{"read", time.Millisecond, 0},
+			{"read", 2 * time.Millisecond, 0},
+			{"fire", time.Millisecond, time.Millisecond},
+			{"read", 3 * time.Millisecond, time.Millisecond},
+			{"fire", 2 * time.Millisecond, 2 * time.Millisecond},
+			{"fire", 3 * time.Millisecond, 3 * time.Millisecond},
+		}
+		if !slices.Equal(events, want) {
+			t.Errorf("got %v, want %v", events, want)
+		}
+	})
+}
+
+// Run reads the next time once the last read is due within d, waking for it, at most n ahead.
+func TestPullerHorizon(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		n    int
+		want []event
+	}{
+		{"Any", 0, []event{
+			{"read", time.Millisecond, 0},
+			{"read", 2 * time.Millisecond, 0},
+			{"read", 10 * time.Millisecond, 0},
+			{"fire", time.Millisecond, time.Millisecond},
+			{"fire", 2 * time.Millisecond, 2 * time.Millisecond},
+			{"read", 11 * time.Millisecond, 5 * time.Millisecond},
+			{"read", 12 * time.Millisecond, 6 * time.Millisecond},
+			{"fire", 10 * time.Millisecond, 10 * time.Millisecond},
+			{"fire", 11 * time.Millisecond, 11 * time.Millisecond},
+			{"fire", 12 * time.Millisecond, 12 * time.Millisecond},
+		}},
+		{"One", 1, []event{
+			{"read", time.Millisecond, 0},
+			{"read", 2 * time.Millisecond, 0},
+			{"fire", time.Millisecond, time.Millisecond},
+			{"read", 10 * time.Millisecond, time.Millisecond},
+			{"fire", 2 * time.Millisecond, 2 * time.Millisecond},
+			{"read", 11 * time.Millisecond, 5 * time.Millisecond},
+			{"fire", 10 * time.Millisecond, 10 * time.Millisecond},
+			{"read", 12 * time.Millisecond, 10 * time.Millisecond},
+			{"fire", 11 * time.Millisecond, 11 * time.Millisecond},
+			{"fire", 12 * time.Millisecond, 12 * time.Millisecond},
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				start := time.Now()
+				var events []event
+				times := reading(start, &events, time.Millisecond, 2*time.Millisecond, 10*time.Millisecond, 11*time.Millisecond, 12*time.Millisecond)
+				err := alarm.Run(t.Context(), times, firing(start, &events), alarm.WithPuller(puller.NewHorizon(5*time.Millisecond, test.n)))
+				if err != nil {
+					t.Errorf("got %v, want nil", err)
+				}
+				if !slices.Equal(events, test.want) {
+					t.Errorf("got %v, want %v", events, test.want)
+				}
+			})
+		})
+	}
 }
 
 // Times are sent on time, then the channel closes.

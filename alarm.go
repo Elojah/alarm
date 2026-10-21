@@ -8,21 +8,23 @@ import (
 
 // Run calls fn with ctx and each time of times once due, in the calling goroutine, until times ends or ctx is done:
 // neither fn nor its middlewares are called after. Lateness never adds up: each time is waited for itself, and a
-// passed one fires at once, unless middleware.MaxDelay drops it.
+// passed one fires at once, unless middleware.MaxDelay drops it. A time is read once the last fired, unless WithPuller
+// reads it ahead.
 //
 // It returns ctx.Err().
 func Run(ctx context.Context, times iter.Seq[time.Time], fn func(ctx context.Context, at time.Time), options ...Option) error {
 	c := newConfig(options)
-	handle := chain(fn, c.middlewares...)
-	w := waiter{holder: c.holder, poll: c.poll, done: ctx.Done()}
-	defer w.stop()
+	r := runner{handle: chain(fn, c.middlewares...), holder: c.holder, puller: c.puller, poll: c.poll, done: ctx.Done()}
+	defer r.stop()
 
 	for at := range times {
-		if !w.wait(at) {
-			break
+		r.held.push(at)
+		if !r.fire(ctx, true) {
+			return ctx.Err()
 		}
-		handle(ctx, at)
 	}
+	// times ended: fire the ones held.
+	r.fire(ctx, false)
 
 	return ctx.Err()
 }
@@ -45,50 +47,69 @@ func Chan(ctx context.Context, times iter.Seq[time.Time], options ...Option) <-c
 	return ch
 }
 
-// waiter waits for the times of one Run, with one timer.
-type waiter struct {
+// runner fires the times of one Run, with one timer.
+type runner struct {
+	handle Handler
 	holder Holder
+	puller Puller
 	poll   time.Duration
 	done   <-chan struct{}
+	held   held
 	// timer is created by the first wait that needs it.
 	timer *time.Timer
 }
 
-// wait waits until the holder releases at, or returns false once done.
-func (w *waiter) wait(at time.Time) bool {
-	for {
-		sleep, due := w.holder.Release(at, time.Now())
+// fire fires the times held as the holder releases them. It returns true once none is held, or once the puller reads
+// the next, if read, and false once done.
+func (r *runner) fire(ctx context.Context, read bool) bool {
+	for r.held.n > 0 {
+		at := r.held.first()
+		now := time.Now()
+		sleep, due := r.holder.Release(at, now)
 		// Passed times and spins never reach the timer's select.
 		select {
-		case <-w.done:
+		case <-r.done:
 			return false
 		default:
 		}
 		if due {
-			return true
+			r.held.pop()
+			r.handle(ctx, at)
+
+			continue
+		}
+		// A read keeps Run from at: none while the holder spins.
+		if read && sleep > 0 {
+			wait, next := r.puller.Pull(r.held.n-1, r.held.last(), now)
+			if next {
+				return true
+			}
+			sleep = min(sleep, wait)
 		}
 		if sleep <= 0 {
 			continue
 		}
 
-		sleep = min(sleep, w.poll)
-		if w.timer == nil {
-			w.timer = time.NewTimer(sleep)
+		sleep = min(sleep, r.poll)
+		if r.timer == nil {
+			r.timer = time.NewTimer(sleep)
 		} else {
 			// No stale value to drain since Go 1.23.
-			w.timer.Reset(sleep)
+			r.timer.Reset(sleep)
 		}
 		select {
-		case <-w.timer.C:
-		case <-w.done:
+		case <-r.timer.C:
+		case <-r.done:
 			return false
 		}
 	}
+
+	return true
 }
 
 // stop releases the timer.
-func (w *waiter) stop() {
-	if w.timer != nil {
-		w.timer.Stop()
+func (r *runner) stop() {
+	if r.timer != nil {
+		r.timer.Stop()
 	}
 }

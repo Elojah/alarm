@@ -33,17 +33,28 @@ err = alarm.Run(ctx, set.Between(time.Now(), time.Time{}), func(ctx context.Cont
 | `WithHolder(h)` | Lets `h` decide when each time is due, rather than once the clock shows it. |
 | `WithMiddleware(m...)` | Wraps `fn`, or Chan's send, in `m`, the first one outermost. |
 | `WithPoll(d)` | Polls the clock at least every `d` while waiting, a minute by default; `d <= 0` means never. |
+| `WithPuller(p)` | Lets `p` decide when each time is read ahead, rather than once the last fired. |
 
 | Ready-made | Does |
 | --- | --- |
 | `holder.NewSpin(d)` | Busy-waits for the last `d` before each time, instead of leaving it to the timer. |
 | `middleware.MaxDelay(d)` | Drops a time passed by more than `d`, instead of firing it late. |
+| `puller.NewAhead(n)` | Holds `n` times read ahead of the one waited for. |
+| `puller.NewHorizon(d, n)` | Reads the next time once the last read is due within `d`, at most `n` ahead; `n <= 0` means any number. |
 
 ## Time
 
 Each time is waited for itself, not as a gap from the last, so lateness never adds up and a passed time fires at once:
 start a set at now with `Between`, or drop it with `middleware.MaxDelay`. A wait polls the clock at least once a
 minute, or as `WithPoll` sets, so a clock step or a suspend shows within it.
+
+## Reading ahead
+
+A time is read once the last fired, so a slow sequence, such as one read from a store, takes its time from the wait
+of the next. `WithPuller` reads times ahead, while Run waits: `puller.NewHorizon(time.Minute, 1000)` reads each time a
+minute before it, holding at most 1000. Run reads in its own goroutine, so a read still keeps it from the time it waits
+for: it reads none while that time is due or a `holder.NewSpin` spins, and wakes for a read when the puller says, not
+only at a poll. Times held cost no allocation once the buffer holding them has grown.
 
 ## Precision
 
@@ -71,6 +82,7 @@ Run one with `go run ./examples/01-run`.
 | [`01-run`](examples/01-run/main.go) | Pulses from an iterator, with `Run` and `holder.NewSpin`. |
 | [`02-chan`](examples/02-chan/main.go) | Times from a slice, received from `Chan`. |
 | [`03-max-delay`](examples/03-max-delay/main.go) | A passed time dropped by `middleware.MaxDelay`. |
+| [`04-horizon`](examples/04-horizon/main.go) | Times read ahead by `puller.NewHorizon`. |
 
 ## Development
 

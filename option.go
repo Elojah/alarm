@@ -36,17 +36,28 @@ func WithPoll(d time.Duration) Option {
 	}
 }
 
+// WithPuller makes p decide when Run reads each time of the sequence ahead, rather than once it fired the last. Give
+// each Run its own. A nil p is ignored.
+func WithPuller(p Puller) Option {
+	return func(c *config) {
+		if p != nil {
+			c.puller = p
+		}
+	}
+}
+
 // config is what options set.
 type config struct {
 	holder      Holder
 	middlewares []Middleware
 	// poll is above 0, so that a sleep it bounds still is one.
-	poll time.Duration
+	poll   time.Duration
+	puller Puller
 }
 
 // newConfig applies options over the defaults.
 func newConfig(options []Option) config {
-	c := config{holder: onTime{}, poll: time.Minute}
+	c := config{holder: onTime{}, poll: time.Minute, puller: lazy{}}
 	for _, option := range options {
 		option(&c)
 	}
