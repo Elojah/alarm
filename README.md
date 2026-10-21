@@ -58,8 +58,9 @@ minute, or as `WithPoll` sets, so a clock step or a suspend shows within it.
 `Reset`, `Close` and `Shutdown` reach the Ring under way from any goroutine, `fn` included, once the `fn` call in
 progress returns. `Reset` drops the times read and not fired yet, and reads the new sequence at once, such as a rule
 edited while it rings. `Close` stops the Ring without waiting, so `fn` can call it, and `Shutdown` waits until it
-returns, or until its own `ctx` is done. Neither cancels `fn`'s `ctx`: cancel Ring's to interrupt `fn`. An Alarm rings
-one sequence at a time, and rings again once a Ring returned, until closed.
+returns, or until its own `ctx` is done. Neither cancels `fn`'s `ctx`: cancel Ring's to interrupt `fn`. A Reset
+allocates nothing, so `fn` can Reset at each time to the next it computes. An Alarm rings one sequence at a time, and
+rings again once a Ring returned, until closed.
 
 ## Reading ahead
 
@@ -83,8 +84,8 @@ Intel Core Ultra 5 226V, GOMAXPROCS 8 (`make bench`):
 | 10ms | | 668µs | 1276µs | 3% |
 | 10ms | 1ms | 1µs | 2µs | 9% |
 
-Without a spin, Ring costs what a `time.Ticker` does, without its drift. A passed time costs Ring 62ns, and Chan 575ns
-for the handoff to the reader.
+Without a spin, Ring costs what a `time.Ticker` does, without its drift. A passed time costs Ring 16ns, since a run
+of them reads the clock once, 55ns with a Reset from `fn` at each, and Chan 470ns for the handoff to the reader.
 
 ## Examples
 

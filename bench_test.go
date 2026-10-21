@@ -32,6 +32,19 @@ func BenchmarkRing_Passed(b *testing.B) {
 	_ = alarm.New().Ring(b.Context(), passed(b), func(context.Context, time.Time) {})
 }
 
+// Ring's cost per time, without waiting, each time a sequence of its own that fn Resets to.
+func BenchmarkReset_Passed(b *testing.B) {
+	a := alarm.New()
+	at := time.Unix(0, 0)
+	next := func(yield func(time.Time) bool) { yield(at) }
+	_ = a.Ring(b.Context(), next, func(context.Context, time.Time) {
+		if b.Loop() {
+			at = at.Add(time.Millisecond)
+			a.Reset(next)
+		}
+	})
+}
+
 // Chan's cost per time, without waiting: a handoff to the reader.
 func BenchmarkChan_Passed(b *testing.B) {
 	for range alarm.New().Chan(b.Context(), passed(b)) {

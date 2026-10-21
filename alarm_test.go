@@ -170,6 +170,35 @@ func TestRing_Cancel(t *testing.T) {
 	})
 }
 
+// A sequence that yields again once Ring stopped it, which a range would panic for, gets false: the time is neither
+// asked about nor fired.
+func TestRing_YieldAgain(t *testing.T) {
+	t.Parallel()
+
+	start := time.Now()
+	h := &asks{start: start}
+	a := alarm.New(alarm.WithHolder(h))
+	times := func(yield func(time.Time) bool) {
+		yield(start.Add(-time.Millisecond))
+		if yield(start.Add(-time.Millisecond)) {
+			t.Error("yield again: got true, want false")
+		}
+	}
+	calls := 0
+	err := a.Ring(t.Context(), times, func(context.Context, time.Time) {
+		calls++
+		if err := a.Close(); err != nil {
+			t.Errorf("got %v, want nil", err)
+		}
+	})
+	if !errors.Is(err, alarm.ErrClosed) {
+		t.Errorf("got %v, want %v", err, alarm.ErrClosed)
+	}
+	if calls != 1 || len(h.nows) != 1 {
+		t.Errorf("got %d calls and %d asks, want 1 and 1", calls, len(h.nows))
+	}
+}
+
 // fn gets Ring's ctx.
 func TestRing_Context(t *testing.T) {
 	t.Parallel()
@@ -226,8 +255,8 @@ func TestRing_Twice(t *testing.T) {
 	})
 }
 
-// Reset drops the times held and reads the new sequence at once, while Ring waits or from fn, even as the sequence
-// ends, and returns false with no Ring to take it.
+// Reset drops the times held and reads the new sequence at once, while Ring waits, reads or from fn, even as the
+// sequence ends, and returns false with no Ring to take it.
 func TestReset(t *testing.T) {
 	t.Parallel()
 
@@ -250,6 +279,38 @@ func TestReset(t *testing.T) {
 				{"read", time.Hour, 0},
 				{"read", 2 * time.Millisecond, time.Millisecond},
 				{"fire", 2 * time.Millisecond, 2 * time.Millisecond},
+				{"read", 3 * time.Millisecond, 2 * time.Millisecond},
+				{"fire", 3 * time.Millisecond, 3 * time.Millisecond},
+			}
+			if !slices.Equal(events, want) {
+				t.Errorf("got %v, want %v", events, want)
+			}
+		})
+	})
+	t.Run("Read", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var events []event
+			// Its read takes 2ms: the Reset reaches Ring while it reads, not while it waits, and the time read, though
+			// due, is dropped.
+			slow := func(yield func(time.Time) bool) {
+				time.Sleep(2 * time.Millisecond)
+				events = append(events, event{"read", 2 * time.Millisecond, time.Since(start)})
+				yield(start.Add(2 * time.Millisecond))
+			}
+			a := alarm.New()
+			errs := ringing(t.Context(), a, slow, firing(start, &events))
+			time.Sleep(time.Millisecond)
+			if !a.Reset(reading(start, &events, 3*time.Millisecond)) {
+				t.Error("got false, want true")
+			}
+			if err := <-errs; err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			want := []event{
+				{"read", 2 * time.Millisecond, 2 * time.Millisecond},
 				{"read", 3 * time.Millisecond, 2 * time.Millisecond},
 				{"fire", 3 * time.Millisecond, 3 * time.Millisecond},
 			}
@@ -573,6 +634,31 @@ func TestWithPoll(t *testing.T) {
 			})
 		})
 	}
+}
+
+// Once the holder released a time, Ring asks about the next at the same now, and at the clock only once one is not due
+// there: a run of passed times reads the clock once.
+func TestWithHolder_Passed(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		h := &asks{start: start}
+		var calls []call
+		err := alarm.New(alarm.WithHolder(h)).Ring(t.Context(), slices.Values(after(start, -2*time.Millisecond, -time.Millisecond, 3*time.Millisecond)),
+			record(start, &calls, time.Millisecond, time.Millisecond))
+		if err != nil {
+			t.Errorf("got %v, want nil", err)
+		}
+		// -1ms and 3ms are asked about at 0, and 3ms, not due there, at 2ms once fn returned, then at 3ms.
+		if want := []time.Duration{0, 0, 0, 2 * time.Millisecond, 3 * time.Millisecond}; !slices.Equal(h.nows, want) {
+			t.Errorf("got asked at %v, want %v", h.nows, want)
+		}
+		want := []call{{-2 * time.Millisecond, 0}, {-time.Millisecond, time.Millisecond}, {3 * time.Millisecond, 3 * time.Millisecond}}
+		if !slices.Equal(calls, want) {
+			t.Errorf("got %v, want %v", calls, want)
+		}
+	})
 }
 
 // ask is when Ring asked a Puller, from start, with how many times held ahead and the last read.

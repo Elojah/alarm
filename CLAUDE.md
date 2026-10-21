@@ -7,10 +7,11 @@ package's. Go 1.26.1, no dependency. Behaviour is in godoc and the README, plans
 ## Layout
 
 - `doc.go`: the package doc. `alarm.go`: `Alarm`, `New`, `Ring`, `Chan`, `Reset`, `Close` and `Shutdown`, and `fire`,
-  which waits for and fires each time, and returns to Ring's range when the puller reads the next. `pending.go`: the
-  ring of times read, not fired yet. `option.go`: the options and `config`. `holder.go`: `Holder` and the default,
-  `onTime`. `puller.go`: `Puller` and the default, `lazy`. `middleware.go`: `Handler`, `Middleware` and `chain`.
-  `bench_test.go`: the cost of a time, and how late times fire on the real clock.
+  which waits for and fires each time, and returns to the sequence, from `yield`, when the puller reads the next, with
+  `release`, which asks the holder, and `sleep`, which waits on the timer. `pending.go`: the ring of times read, not
+  fired yet. `option.go`: the options and `config`. `holder.go`: `Holder` and the default, `onTime`. `puller.go`:
+  `Puller` and the default, `lazy`. `middleware.go`: `Handler`, `Middleware` and `chain`.
+  `bench_test.go`: the cost of a time, with a Reset per time too, and how late times fire on the real clock.
 - `holder/`, `puller/` and `middleware/` hold ready-made ones, as `../multicast` does. `middleware` imports `alarm` for
   its types, `holder` and `puller` nothing from it: they are matched by their method.
 
@@ -31,30 +32,40 @@ golangci-lint in `./bin`.
 
 - Comments are short: invariants, non-obvious whys, the public contract.
 - Options have no prefix: `WithHolder`, `WithMiddleware`, `WithPuller`.
-- A Holder or a Puller reads no clock: Ring passes now. A Middleware hands ctx down, or one derived from it.
+- A Holder or a Puller reads no clock: Ring passes now. A Holder keeps a time it released due at any later now. A
+  Middleware hands ctx down, or one derived from it.
 
 ## Invariants
 
 - Nothing is allocated per time: one timer per Alarm, created by the first wait that needs it and reset for each, which
-  since Go 1.23 leaves no stale value to drain, the middleware chain built once per Ring, and the ring of times held,
-  grown to the most held at once and then reused. `BenchmarkRing_Passed` shows 0 allocs. The ring wraps with a
-  branch, not `%`: two `%` per time cost passed times ~10ns.
+  since Go 1.23 leaves no stale value to drain, the middleware chain and `yield` built once per Ring, and the ring of
+  times held, grown to the most held at once and then reused. A sequence is called with `yield`, not ranged over: a
+  range over a func value allocates its body each time it runs, 2 allocs and ~200ns rather than ~55ns for a Reset from
+  each fn. `BenchmarkRing_Passed` and `BenchmarkReset_Passed` show 0 allocs. The ring wraps with a branch, not `%`: two
+  `%` per time cost passed times ~10ns.
+- A run of passed times reads the clock once: once the holder released a time at `now`, `release` asks about the next
+  at that `now`, and reads the clock only if it is not due there: ~16ns a passed time rather than ~40ns, most of it
+  `time.Now`. A time not due, a sleep and a spin still read it, so the puller always gets a fresh now. `end` clears
+  `released`, so that a new Ring reads the clock.
 - Ring waits for each time itself, never for a gap from the last one, so lateness never adds up.
 - Each pass of `fire` checks done with a non-blocking select, and a Reset or a Close with `interrupted`, an atomic, so
   that a run of passed times, or a spin, which never reach the timer's select, still stop. Nothing locks `mu` per time.
-  `fire` checks `interrupted` again before returning to the range, so a Reset from the last fn reads nothing more of
-  the old sequence.
+  `fire` checks `interrupted` again before returning to the sequence, so a Reset from the last fn reads nothing more
+  of the old sequence. `yield` returns false from then on, `stopped`, where a range would panic.
 - `mu` guards `ringing`, `next`, `ending` and the closing of `closed`. Ring decides to return in `take`, which sets
   `ending` under `mu`, so a Reset either reaches the Ring or returns false, even as the sequence ends. `wake` holds a
-  token exactly while `next` waits: Reset sends it and `drop` drains it, both under `mu`.
-- Only the Ring under way touches `handle`, `done`, `pending` and `timer`. `end`, deferred, stops the timer and frees
-  `ringing` under `mu`, so the next Ring takes them over safely, even after fn panicked.
+  token at most while `next` waits: Reset sends it only if `asleep`, and `drop` drains it, both under `mu`, so that a
+  Reset from fn or while Ring reads locks no channel. `sleep` stores `asleep` before loading `interrupted`, Reset
+  stores `interrupted` before loading `asleep`: either `sleep` sees the Reset, or the Reset wakes it.
+- Only the Ring under way touches `handle`, `done`, `yield`, `stopped`, `pending`, `timer`, `now` and `released`.
+  `end`, deferred, stops the timer and frees `ringing` under `mu`, so the next Ring takes them over safely, even after
+  fn panicked.
 - Close never waits, so fn can call it. Shutdown waits on `ringing`. Neither cancels fn's ctx. Chan's send also selects
   on `closed`, so a reader that stops and Closes frees it.
 - A sleep on the timer is at most `config.poll`, a minute unless `WithPoll` sets it, so that a wall clock step or a
   suspend shows within it. It is never 0: `WithPoll`'s d <= 0 becomes `math.MaxInt64`.
 - Ring needs no goroutine and no `iter.Pull`, so that TinyGo builds it. Chan's goroutine is the only one. It reads ahead
-  by returning from its range body while holding times, and fires those held once the sequence ends.
+  by returning from `yield` while holding times, and fires those held once the sequence ends.
 - Ring asks the puller only when the time it waits for is not due and the holder sleeps (sleep > 0): a read keeps Ring
   from that time, so none happens while it is due or a spin runs. Times held fire in the order read.
 
