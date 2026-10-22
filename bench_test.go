@@ -51,6 +51,12 @@ func BenchmarkChan_Passed(b *testing.B) {
 	}
 }
 
+// Chan's cost per time, without waiting, with a buffer: the reader takes the times in runs.
+func BenchmarkChan_Buffered(b *testing.B) {
+	for range alarm.New(alarm.WithBuffer(64)).Chan(b.Context(), passed(b)) {
+	}
+}
+
 // How late times fire on the real clock, with and without a spin.
 func BenchmarkRing_Late(b *testing.B) {
 	for _, period := range []time.Duration{time.Millisecond, 10 * time.Millisecond} {

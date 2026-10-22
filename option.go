@@ -1,12 +1,31 @@
 package alarm
 
 import (
+	"context"
 	"math"
 	"time"
 )
 
 // Option configures an Alarm, passed to New.
 type Option func(c *config)
+
+// WithBuffer makes Chan's channel hold n times, so that a reader may lag n times, which then reach it late. Times
+// buffered once Ring returns stay readable before the channel closes. n <= 0, the default, means none.
+func WithBuffer(n int) Option {
+	return func(c *config) {
+		c.buffer = max(n, 0)
+	}
+}
+
+// WithCoalesce makes Ring read the next time before it fires one passed by more than d, and drop the first if the next
+// passed too: of a run of passed times, only the latest fires. dropped, if not nil, gets each time dropped and how
+// late, in Ring's goroutine as fn does, and can Reset or Close. A read keeps Ring from the time due, so keep d above
+// the timer's resolution, a millisecond on Linux. d <= 0, the default, means none.
+func WithCoalesce(d time.Duration, dropped func(ctx context.Context, at time.Time, late time.Duration)) Option {
+	return func(c *config) {
+		c.coalesce, c.coalesced = max(d, 0), dropped
+	}
+}
 
 // WithHolder makes h decide when each time is due, rather than once the clock shows it. Give each Alarm its own. A nil
 // h is ignored.
@@ -48,6 +67,10 @@ func WithPuller(p Puller) Option {
 
 // config is what options set.
 type config struct {
+	buffer int
+	// coalesce is 0 while none is coalesced.
+	coalesce    time.Duration
+	coalesced   func(ctx context.Context, at time.Time, late time.Duration)
 	holder      Holder
 	middlewares []Middleware
 	// poll is above 0, so that a sleep it bounds still is one.

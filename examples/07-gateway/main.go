@@ -132,7 +132,7 @@ func (gw gateway) run(ctx context.Context, times iter.Seq[time.Time], late time.
 
 	// No holder.NewSpin: a poll a millisecond late is fine, a core spinning on a gateway is not. MaxDelay drops the
 	// polls missed while the gateway was suspended or stalled, which would otherwise read the probe all at once.
-	a := alarm.New(alarm.WithMiddleware(middleware.MaxDelay(late)))
+	a := alarm.New(alarm.WithMiddleware(middleware.MaxDelay(late, nil)))
 	err := a.Ring(ctx, times, func(ctx context.Context, at time.Time) {
 		t, err := gw.device.Read(ctx)
 		if err != nil {

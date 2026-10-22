@@ -38,6 +38,11 @@ func (p *pending) first() time.Time {
 	return p.times[p.head]
 }
 
+// second returns the time held after the first. Called with at least two held.
+func (p *pending) second() time.Time {
+	return p.times[p.index(1)]
+}
+
 // last returns the last time read.
 func (p *pending) last() time.Time {
 	return p.times[p.index(p.n-1)]

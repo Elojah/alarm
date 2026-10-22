@@ -60,9 +60,13 @@ golangci-lint in `./bin`.
 - A sleep on the timer is at most `config.poll`, a minute unless `WithPoll` sets it, so that a wall clock step or a
   suspend shows within it. It is never 0: `WithPoll`'s d <= 0 becomes `math.MaxInt64`.
 - Ring needs no goroutine and no `iter.Pull`, so that TinyGo builds it. Chan's goroutine is the only one. It reads ahead
-  by ranging on while holding times, and fires those held once the sequence ends.
+  by ranging on while holding times, and fires those held once the sequence ends. Its channel holds `WithBuffer`'s n,
+  which stay readable once Ring returns.
 - Ring asks the puller only when the time it waits for is not due and the holder sleeps (sleep > 0): a read keeps Ring
   from that time, so none happens while it is due or a spin runs. Times held fire in the order read.
+- `WithCoalesce` reads the next time, without asking the puller, before firing one passed by more than d, and drops the
+  first if the next passed by the clock: the holder sees only the time Ring is at. `coalesce` is 0 while off, checked
+  before `now.Sub`, which costs ~8ns a time.
 
 ## Decisions not to revert
 

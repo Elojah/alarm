@@ -66,6 +66,13 @@ func firing(start time.Time, events *[]event) func(context.Context, time.Time) {
 	}
 }
 
+// dropping logs each time dropped to events, when at plus how late it was dropped, both from start.
+func dropping(start time.Time, events *[]event) func(context.Context, time.Time, time.Duration) {
+	return func(_ context.Context, at time.Time, late time.Duration) {
+		*events = append(*events, event{op: "drop", at: at.Sub(start), now: at.Sub(start) + late})
+	}
+}
+
 // Times fire on time, even past a poll.
 func TestRing(t *testing.T) {
 	t.Parallel()
@@ -681,6 +688,191 @@ func TestWithPuller(t *testing.T) {
 	})
 }
 
+// Of a run of passed times only the latest fires, the next read before each passed by more than d, even from times
+// held, and the drops are reported. A time late by d at most fires with no read before it, as with d <= 0 every time.
+func TestWithCoalesce(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Passed", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var events []event
+			times := reading(start, &events, -3*time.Millisecond, -2*time.Millisecond, -time.Millisecond, time.Millisecond, 2*time.Millisecond)
+			err := alarm.New(alarm.WithCoalesce(500*time.Microsecond, dropping(start, &events))).Ring(t.Context(), times, firing(start, &events))
+			if err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			want := []event{
+				{"read", -3 * time.Millisecond, 0},
+				{"read", -2 * time.Millisecond, 0},
+				{"drop", -3 * time.Millisecond, 0},
+				{"read", -time.Millisecond, 0},
+				{"drop", -2 * time.Millisecond, 0},
+				{"read", time.Millisecond, 0},
+				{"fire", -time.Millisecond, 0},
+				{"fire", time.Millisecond, time.Millisecond},
+				{"read", 2 * time.Millisecond, time.Millisecond},
+				{"fire", 2 * time.Millisecond, 2 * time.Millisecond},
+			}
+			if !slices.Equal(events, want) {
+				t.Errorf("got %v, want %v", events, want)
+			}
+		})
+	})
+	t.Run("Within", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var events []event
+			times := reading(start, &events, -time.Millisecond, time.Millisecond)
+			err := alarm.New(alarm.WithCoalesce(time.Millisecond, dropping(start, &events))).Ring(t.Context(), times, firing(start, &events))
+			if err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			want := []event{
+				{"read", -time.Millisecond, 0},
+				{"fire", -time.Millisecond, 0},
+				{"read", time.Millisecond, 0},
+				{"fire", time.Millisecond, time.Millisecond},
+			}
+			if !slices.Equal(events, want) {
+				t.Errorf("got %v, want %v", events, want)
+			}
+		})
+	})
+	t.Run("Ended", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var events []event
+			times := reading(start, &events, -2*time.Millisecond, -time.Millisecond)
+			err := alarm.New(alarm.WithCoalesce(500*time.Microsecond, dropping(start, &events))).Ring(t.Context(), times, firing(start, &events))
+			if err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			want := []event{
+				{"read", -2 * time.Millisecond, 0},
+				{"read", -time.Millisecond, 0},
+				{"drop", -2 * time.Millisecond, 0},
+				{"fire", -time.Millisecond, 0},
+			}
+			if !slices.Equal(events, want) {
+				t.Errorf("got %v, want %v", events, want)
+			}
+		})
+	})
+	t.Run("Held", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var events []event
+			times := reading(start, &events, time.Millisecond, 2*time.Millisecond, 3*time.Millisecond, 4*time.Millisecond, 5*time.Millisecond)
+			fire := firing(start, &events)
+			a := alarm.New(alarm.WithPuller(puller.NewAhead(3)), alarm.WithCoalesce(500*time.Microsecond, dropping(start, &events)))
+			err := a.Ring(t.Context(), times, func(ctx context.Context, at time.Time) {
+				fire(ctx, at)
+				if at.Equal(start.Add(time.Millisecond)) {
+					time.Sleep(3 * time.Millisecond)
+				}
+			})
+			if err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			want := []event{
+				{"read", time.Millisecond, 0},
+				{"read", 2 * time.Millisecond, 0},
+				{"read", 3 * time.Millisecond, 0},
+				{"read", 4 * time.Millisecond, 0},
+				{"fire", time.Millisecond, time.Millisecond},
+				{"drop", 2 * time.Millisecond, 4 * time.Millisecond},
+				{"drop", 3 * time.Millisecond, 4 * time.Millisecond},
+				{"fire", 4 * time.Millisecond, 4 * time.Millisecond},
+				{"read", 5 * time.Millisecond, 4 * time.Millisecond},
+				{"fire", 5 * time.Millisecond, 5 * time.Millisecond},
+			}
+			if !slices.Equal(events, want) {
+				t.Errorf("got %v, want %v", events, want)
+			}
+		})
+	})
+	t.Run("Slow", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var calls []call
+			// Every 10ms from 10ms, each call 25ms long.
+			ds := make([]time.Duration, 8)
+			for i := range ds {
+				ds[i] = time.Duration(i+1) * 10 * time.Millisecond
+			}
+			sleeps := slices.Repeat([]time.Duration{25 * time.Millisecond}, 8)
+			err := alarm.New(alarm.WithCoalesce(2*time.Millisecond, nil)).Ring(t.Context(), slices.Values(after(start, ds...)),
+				record(start, &calls, sleeps...))
+			if err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			want := []call{
+				{10 * time.Millisecond, 10 * time.Millisecond},
+				{30 * time.Millisecond, 35 * time.Millisecond},
+				{60 * time.Millisecond, 60 * time.Millisecond},
+				{80 * time.Millisecond, 85 * time.Millisecond},
+			}
+			if !slices.Equal(calls, want) {
+				t.Errorf("got %v, want %v", calls, want)
+			}
+		})
+	})
+	t.Run("Zero", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var events []event
+			times := reading(start, &events, -2*time.Millisecond, -time.Millisecond)
+			err := alarm.New(alarm.WithCoalesce(0, dropping(start, &events))).Ring(t.Context(), times, firing(start, &events))
+			if err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			want := []event{
+				{"read", -2 * time.Millisecond, 0},
+				{"fire", -2 * time.Millisecond, 0},
+				{"read", -time.Millisecond, 0},
+				{"fire", -time.Millisecond, 0},
+			}
+			if !slices.Equal(events, want) {
+				t.Errorf("got %v, want %v", events, want)
+			}
+		})
+	})
+	t.Run("Close", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var calls []call
+			var a *alarm.Alarm
+			a = alarm.New(alarm.WithCoalesce(500*time.Microsecond, func(context.Context, time.Time, time.Duration) {
+				if err := a.Close(); err != nil {
+					t.Errorf("got %v, want nil", err)
+				}
+			}))
+			err := a.Ring(t.Context(), slices.Values(after(start, -2*time.Millisecond, -time.Millisecond, time.Millisecond)), record(start, &calls))
+			if !errors.Is(err, alarm.ErrClosed) {
+				t.Errorf("got %v, want %v", err, alarm.ErrClosed)
+			}
+			if len(calls) != 0 {
+				t.Errorf("got %v, want none", calls)
+			}
+		})
+	})
+}
+
 // A time passed by more than the max delay is dropped.
 func TestMiddlewareMaxDelay(t *testing.T) {
 	t.Parallel()
@@ -688,8 +880,9 @@ func TestMiddlewareMaxDelay(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
 		var calls []call
+		var events []event
 		times := after(start, -time.Hour, time.Millisecond, 2*time.Millisecond, 3*time.Millisecond, 4*time.Millisecond)
-		err := alarm.New(alarm.WithMiddleware(middleware.MaxDelay(time.Millisecond))).Ring(t.Context(), slices.Values(times),
+		err := alarm.New(alarm.WithMiddleware(middleware.MaxDelay(time.Millisecond, dropping(start, &events)))).Ring(t.Context(), slices.Values(times),
 			record(start, &calls, 2500*time.Microsecond))
 		if err != nil {
 			t.Errorf("got %v, want nil", err)
@@ -699,7 +892,35 @@ func TestMiddlewareMaxDelay(t *testing.T) {
 		if !slices.Equal(calls, want) {
 			t.Errorf("got %v, want %v", calls, want)
 		}
+		wantDrops := []event{{"drop", -time.Hour, 0}, {"drop", 2 * time.Millisecond, 3500 * time.Microsecond}}
+		if !slices.Equal(events, wantDrops) {
+			t.Errorf("got %v, want %v", events, wantDrops)
+		}
 	})
+}
+
+// A panic in fn is recovered and reported, and Ring rings on.
+func TestMiddlewareRecover(t *testing.T) {
+	t.Parallel()
+
+	start := time.Now()
+	var fired, recovered []time.Duration
+	a := alarm.New(alarm.WithMiddleware(middleware.Recover(func(_ context.Context, at time.Time, v any) {
+		if v != "boom" {
+			t.Errorf("got %v, want boom", v)
+		}
+		recovered = append(recovered, at.Sub(start))
+	})))
+	err := a.Ring(t.Context(), slices.Values(after(start, -2*time.Millisecond, -time.Millisecond)), func(_ context.Context, at time.Time) {
+		fired = append(fired, at.Sub(start))
+		panic("boom")
+	})
+	if err != nil {
+		t.Errorf("got %v, want nil", err)
+	}
+	if want := []time.Duration{-2 * time.Millisecond, -time.Millisecond}; !slices.Equal(fired, want) || !slices.Equal(recovered, want) {
+		t.Errorf("got fired %v, recovered %v, want both %v", fired, recovered, want)
+	}
 }
 
 // A spin never fires early, and stops once ctx is done. On the real clock: a spin never ends in a bubble.
@@ -870,5 +1091,77 @@ func TestChan_Close(t *testing.T) {
 		if at, ok := <-ch; ok {
 			t.Errorf("got %v, want closed", at.Sub(start))
 		}
+	})
+}
+
+// Chan's buffer holds n times while the reader lags, and once Ring returns they stay readable before the channel
+// closes. n < 0 means none.
+func TestWithBuffer(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Lag", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var sent []call
+			sending := func(next alarm.Handler) alarm.Handler {
+				return func(ctx context.Context, at time.Time) {
+					next(ctx, at)
+					sent = append(sent, call{at: at.Sub(start), now: time.Since(start)})
+				}
+			}
+			ch := alarm.New(alarm.WithBuffer(2), alarm.WithMiddleware(sending)).Chan(t.Context(),
+				slices.Values(after(start, time.Millisecond, 2*time.Millisecond, 3*time.Millisecond)))
+			time.Sleep(10 * time.Millisecond)
+			var calls []call
+			for at := range ch {
+				calls = append(calls, call{at: at.Sub(start), now: time.Since(start)})
+			}
+			// The send at 3ms finds the buffer full, and waits for the reader.
+			wantSent := []call{{time.Millisecond, time.Millisecond}, {2 * time.Millisecond, 2 * time.Millisecond}, {3 * time.Millisecond, 10 * time.Millisecond}}
+			if !slices.Equal(sent, wantSent) {
+				t.Errorf("got sent %v, want %v", sent, wantSent)
+			}
+			want := []call{{time.Millisecond, 10 * time.Millisecond}, {2 * time.Millisecond, 10 * time.Millisecond}, {3 * time.Millisecond, 10 * time.Millisecond}}
+			if !slices.Equal(calls, want) {
+				t.Errorf("got %v, want %v", calls, want)
+			}
+		})
+	})
+	t.Run("Shutdown", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			a := alarm.New(alarm.WithBuffer(2))
+			ch := a.Chan(t.Context(), slices.Values(after(start, time.Millisecond, 2*time.Millisecond, 3*time.Millisecond)))
+			// The send at 3ms waits for room.
+			time.Sleep(5 * time.Millisecond)
+			if err := a.Shutdown(t.Context()); err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			var got []time.Duration
+			for at := range ch {
+				got = append(got, at.Sub(start))
+			}
+			if want := []time.Duration{time.Millisecond, 2 * time.Millisecond}; !slices.Equal(got, want) {
+				t.Errorf("got %v, want %v", got, want)
+			}
+		})
+	})
+	t.Run("Negative", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var calls []call
+			for at := range alarm.New(alarm.WithBuffer(-1)).Chan(t.Context(), slices.Values(after(start, time.Millisecond))) {
+				calls = append(calls, call{at: at.Sub(start), now: time.Since(start)})
+			}
+			if want := []call{{time.Millisecond, time.Millisecond}}; !slices.Equal(calls, want) {
+				t.Errorf("got %v, want %v", calls, want)
+			}
+		})
 	})
 }

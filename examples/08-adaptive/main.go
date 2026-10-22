@@ -133,7 +133,7 @@ func (gw gateway) run(ctx context.Context, idle, running rrule.Set, now, end tim
 	}
 
 	// MaxDelay drops a sample later than the shorter period, such as those missed while the gateway was suspended.
-	a := alarm.New(alarm.WithMiddleware(middleware.MaxDelay(running.RRules[0].XFreq)))
+	a := alarm.New(alarm.WithMiddleware(middleware.MaxDelay(running.RRules[0].XFreq, nil)))
 	pumping := false
 	err := a.Ring(ctx, idle.Between(now, end), func(ctx context.Context, at time.Time) {
 		v, err := gw.device.Read(ctx)

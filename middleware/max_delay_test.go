@@ -9,7 +9,8 @@ import (
 	"github.com/elojah/alarm/middleware"
 )
 
-// A time passed by more than d is dropped, and with d <= 0 none is. In a bubble, the clock stays put while it checks.
+// A time passed by more than d is dropped, and reported with how late, and with d <= 0 none is. In a bubble, the clock
+// stays put while it checks.
 func TestMaxDelay(t *testing.T) {
 	t.Parallel()
 
@@ -28,13 +29,32 @@ func TestMaxDelay(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				called := false
-				handle := middleware.MaxDelay(test.d)(func(context.Context, time.Time) { called = true })
-				handle(t.Context(), time.Now().Add(-test.late))
-				if called != test.want {
-					t.Errorf("got called %v, want %v", called, test.want)
+				at := time.Now().Add(-test.late)
+				called, dropped := false, false
+				handle := middleware.MaxDelay(test.d, func(_ context.Context, got time.Time, late time.Duration) {
+					dropped = true
+					if !got.Equal(at) || late != test.late {
+						t.Errorf("got dropped %v late %v, want %v late %v", got, late, at, test.late)
+					}
+				})(func(context.Context, time.Time) { called = true })
+				handle(t.Context(), at)
+				if called != test.want || dropped == test.want {
+					t.Errorf("got called %v, dropped %v, want called %v", called, dropped, test.want)
 				}
 			})
 		})
 	}
+}
+
+// A nil dropped drops a time silently.
+func TestMaxDelay_Nil(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		called := false
+		middleware.MaxDelay(time.Millisecond, nil)(func(context.Context, time.Time) { called = true })(t.Context(), time.Now().Add(-time.Hour))
+		if called {
+			t.Error("got called, want dropped")
+		}
+	})
 }

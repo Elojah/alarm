@@ -49,8 +49,9 @@ func New(options ...Option) *Alarm {
 }
 
 // Ring calls fn with ctx and each time of times once due, in the calling goroutine, until times ends, ctx is done or
-// Close. Each time is waited for itself, so lateness never adds up and a passed time fires at once. A time is read
-// once the last fired, unless WithPuller reads it ahead.
+// Close. Each time is waited for itself, so lateness from waits never adds up and a passed time fires at once, but an
+// fn slower than the gap between times makes each later one later: WithCoalesce or middleware.MaxDelay drops them. A
+// time is read once the last fired, unless WithPuller or WithCoalesce reads it ahead.
 //
 // It returns nil once times ends, ctx.Err() once ctx is done, ErrClosed after Close, and ErrRinging at once while
 // another Ring or Chan of a is under way.
@@ -72,9 +73,10 @@ func (a *Alarm) Ring(ctx context.Context, times iter.Seq[time.Time], fn func(ctx
 }
 
 // Chan is Ring sending each time on the returned channel, from a goroutine of its own, and closing it once Ring
-// returns. A send blocks until read, delaying later times: a reader that stops early must Close or cancel ctx.
+// returns. A send blocks until read, or until WithBuffer's buffer has room, delaying later times: a reader that stops
+// early must Close or cancel ctx.
 func (a *Alarm) Chan(ctx context.Context, times iter.Seq[time.Time]) <-chan time.Time {
-	ch := make(chan time.Time)
+	ch := make(chan time.Time, a.buffer)
 	go func() {
 		defer close(ch)
 
@@ -187,7 +189,7 @@ func (a *Alarm) ring(ctx context.Context, times iter.Seq[time.Time]) {
 }
 
 // fire fires the times held as the holder releases them. It returns true once none is held or, if read, the puller
-// asks for the next, and false once done, closed or reset.
+// or WithCoalesce asks for the next, and false once done, closed or reset.
 func (a *Alarm) fire(ctx context.Context, read bool) bool {
 	for a.pending.n > 0 {
 		at := a.pending.first()
@@ -203,6 +205,20 @@ func (a *Alarm) fire(ctx context.Context, read bool) bool {
 			return false
 		}
 		if due {
+			// Coalescing: the next is read first, and at dropped if the next passed too.
+			if a.coalesce > 0 && now.Sub(at) > a.coalesce {
+				if a.pending.n == 1 && read {
+					return true
+				}
+				if a.pending.n > 1 && !a.pending.second().After(now) {
+					a.pending.pop()
+					if a.coalesced != nil {
+						a.coalesced(ctx, at, now.Sub(at))
+					}
+
+					continue
+				}
+			}
 			a.pending.pop()
 			a.handle(ctx, at)
 
