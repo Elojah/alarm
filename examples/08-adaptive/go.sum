@@ -1,4 +1,4 @@
 github.com/elojah/multicast v0.1.1-0.20261021154555-8753b2c0c502 h1:vTrXIAJcb2flIaQuU5G/AgR60zAd8wcdOy/oFavGl6Q=
 github.com/elojah/multicast v0.1.1-0.20261021154555-8753b2c0c502/go.mod h1:IajkKADIsT90zIi9PgR23wX5hXEd6H7dnpTn+1RIAmw=
-github.com/elojah/rrule v1.1.0 h1:7SiPn5O7emQj4iTkdf1HytUMyjHHY+9PIcs8PxGs2ts=
-github.com/elojah/rrule v1.1.0/go.mod h1:kU08p77j+3UCUNiKInjFWRs8i5AvHYFO+bUTSscG5wA=
+github.com/elojah/rrule v0.1.0 h1:2wOxkg6NlnXjsBR0u3PSFQOaN4lYVHIhxowdph9n1Uw=
+github.com/elojah/rrule v0.1.0/go.mod h1:kU08p77j+3UCUNiKInjFWRs8i5AvHYFO+bUTSscG5wA=
