@@ -53,6 +53,7 @@ err = a.Ring(ctx, set.Between(time.Now(), time.Time{}), func(ctx context.Context
 | `middleware.Recover(recovered)` | Recovers a panic in `fn`, which would end Ring, and reports it to `recovered`. |
 | `puller.NewAhead(n)` | Holds `n` times read ahead of the one waited for. |
 | `puller.NewHorizon(d, n)` | Reads each time once it is due within `d`, at most `n` ahead; `n <= 0` means any number. |
+| `puller.NewEvery(d, p)` | Lets `p` read only at ticks, every `d`, rather than whenever it would. |
 
 ## Time
 
@@ -80,8 +81,9 @@ Neither cancels `fn`'s `ctx`: cancel Ring's to interrupt `fn`.
 
 A time is read once the last fired, so a slow sequence, such as one read from a store, delays the next. `WithPuller`
 reads ahead while Ring waits: `puller.NewHorizon(time.Minute, 1000)` reads each time a minute before it, at most 1000
-held. A read still blocks Ring, so the puller asks for none while a time is due or a spin runs. `WithCoalesce` reads
-one before a time passed by more than its `d`.
+held. `puller.NewEvery(15*time.Minute, puller.NewHorizon(24*time.Hour, 0))` reads a day ahead in a burst every 15
+minutes rather than one time at a time. A read still blocks Ring, so the puller asks for none while a time is due or a
+spin runs. `WithCoalesce` reads one before a time passed by more than its `d`.
 
 ## Precision
 

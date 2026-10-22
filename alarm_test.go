@@ -1041,6 +1041,38 @@ func TestPullerHorizon(t *testing.T) {
 	}
 }
 
+// Ring reads only at ticks, every 4ms, as the Horizon decides: none at 4ms, 10ms not due within 5ms yet, and none at
+// 5ms, when the Horizon alone reads.
+func TestPullerEvery(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		var events []event
+		times := reading(start, &events, time.Millisecond, 2*time.Millisecond, 10*time.Millisecond, 11*time.Millisecond, 12*time.Millisecond)
+		a := alarm.New(alarm.WithPuller(puller.NewEvery(4*time.Millisecond, puller.NewHorizon(5*time.Millisecond, 0))))
+		err := a.Ring(t.Context(), times, firing(start, &events))
+		if err != nil {
+			t.Errorf("got %v, want nil", err)
+		}
+		want := []event{
+			{"read", time.Millisecond, 0},
+			{"read", 2 * time.Millisecond, 0},
+			{"read", 10 * time.Millisecond, 0},
+			{"fire", time.Millisecond, time.Millisecond},
+			{"fire", 2 * time.Millisecond, 2 * time.Millisecond},
+			{"read", 11 * time.Millisecond, 8 * time.Millisecond},
+			{"read", 12 * time.Millisecond, 8 * time.Millisecond},
+			{"fire", 10 * time.Millisecond, 10 * time.Millisecond},
+			{"fire", 11 * time.Millisecond, 11 * time.Millisecond},
+			{"fire", 12 * time.Millisecond, 12 * time.Millisecond},
+		}
+		if !slices.Equal(events, want) {
+			t.Errorf("got %v, want %v", events, want)
+		}
+	})
+}
+
 // Times are sent on time, then the channel closes.
 func TestChan(t *testing.T) {
 	t.Parallel()

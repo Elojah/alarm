@@ -3,5 +3,5 @@
 //
 //	err := alarm.New(alarm.WithPuller(puller.NewHorizon(time.Minute, 1000))).Ring(ctx, times, fn)
 //
-// NewAhead holds n times read ahead, and NewHorizon the times due within d.
+// NewAhead holds n times read ahead, and NewHorizon the times due within d. NewEvery lets either read only at ticks.
 package puller
