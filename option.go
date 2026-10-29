@@ -9,6 +9,13 @@ import (
 // Option configures an Alarm, passed to New.
 type Option func(c *config)
 
+// WithAddLimit makes Add return false while n times added are held, not fired yet. n <= 0, the default, means none.
+func WithAddLimit(n int) Option {
+	return func(c *config) {
+		c.addLimit = max(n, 0)
+	}
+}
+
 // WithBuffer makes Chan's channel hold n times, so that a reader may lag n times, which then reach it late. Times
 // buffered once Ring returns stay readable before the channel closes. n <= 0, the default, means none.
 func WithBuffer(n int) Option {
@@ -67,7 +74,9 @@ func WithPuller(p Puller) Option {
 
 // config is what options set.
 type config struct {
-	buffer int
+	// addLimit is 0 while none limits Add.
+	addLimit int
+	buffer   int
 	// coalesce is 0 while none is coalesced.
 	coalesce    time.Duration
 	coalesced   func(ctx context.Context, at time.Time, late time.Duration)

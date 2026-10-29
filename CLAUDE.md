@@ -6,9 +6,10 @@ package's. Go 1.26.1, no dependency. Behaviour is in godoc and the README, plans
 
 ## Layout
 
-- `doc.go`: the package doc. `alarm.go`: `Alarm`, `New`, `Ring`, `Chan`, `Reset`, `Close` and `Shutdown`, and `fire`,
-  which waits for and fires each time, and returns to the sequence when the puller reads the next, with `sleep`, which
-  waits on the timer. `pending.go`: the ring of times read, not fired yet. `option.go`: the options and `config`.
+- `doc.go`: the package doc. `alarm.go`: `Alarm`, `New`, `Ring`, `Chan`, `Reset`, `Add`, `Remove`, `Close` and
+  `Shutdown`, and `fire`, which waits for and fires each time, and returns to the sequence when the puller reads the
+  next, with `sleep`, which waits on the timer. `pending.go`: the ring of times read, not fired yet. `added.go`: the
+  min-heap of times Add gave, not fired yet. `option.go`: the options and `config`.
   `holder.go`: `Holder` and the default, `onTime`. `puller.go`: `Puller` and the default, `lazy`. `middleware.go`:
   `Handler`, `Middleware` and `chain`. `bench_test.go`: the cost of a time, with a Reset per time too, and how late
   times fire on the real clock. `assets/logo.svg`: the README's logo, an alarm clock whose face is a sequence.
@@ -42,17 +43,25 @@ golangci-lint in `./bin`.
 
 - Nothing is allocated per time: one timer per Alarm, created by the first wait that needs it and reset for each, which
   since Go 1.23 leaves no stale value to drain, the middleware chain built once per Ring, and the ring of times held,
-  grown to the most held at once and then reused. `BenchmarkRing_Passed` shows 0 allocs. A range over a sequence
-  allocates its body, so each Reset costs 2.
+  grown to the most held at once and then reused, as is the heap of times added. `BenchmarkRing_Passed` and
+  `BenchmarkAdd_Passed` show 0 allocs. A range over a sequence allocates its body, so each Reset costs 2.
 - Ring waits for each time itself, never for a gap from the last one, so lateness never adds up.
-- Each pass of `fire` checks done with a non-blocking select, and a Reset or a Close with `interrupted`, an atomic, so
-  that a run of passed times, or a spin, which never reach the timer's select, still stop. Nothing locks `mu` per time.
-  `fire` checks `interrupted` again before returning to the sequence, so a Reset from the last fn reads nothing more
-  of the old sequence.
-- `mu` guards `ringing`, `next`, `ending` and the closing of `closed`. Ring decides to return in `take`, which sets
-  `ending` under `mu`, so a Reset either reaches the Ring or returns false, even as the sequence ends. `wake` holds a
-  token at most while `next` waits: Reset sends it, and `drop` drains it, both under `mu`.
-- Only the Ring under way touches `handle`, `done`, `pending` and `timer`.
+- Each pass of `fire` first checks done with a non-blocking select, a Reset or a Close with `interrupted`, and an Add
+  or a Remove with `changed`, both atomics, so that a run of passed times, or a spin, which never reach the timer's
+  select, still stop. Nothing locks `mu` per time of a sequence. That check also runs before returning to the
+  sequence, so a Reset from the last fn reads nothing more of the old sequence. `sleep` returns nothing: the next pass
+  sees why it woke, so a stale `wake` token costs a pass.
+- `mu` guards `ringing`, `next`, `ending`, `added` and the closing of `closed`. Ring decides to return in `take`, which
+  sets `ending` under `mu`, so a Reset or an Add either reaches the Ring or returns false, even as the sequence ends:
+  an Add that lands after `fire`'s last check makes `take` return `none`, an empty sequence, so the time fires.
+  `wake` holds a token at most while `next` or a change to `added` waits: Reset, Add and Remove send it, `drop` and
+  `reload` drain it, all under `mu`, `reload` only while no `next` waits.
+- Times added are kept apart from `pending`, which is FIFO and seen by the puller: a far one holds back neither the
+  sequence nor its reads. Ring copies `added`'s first into `soonest` on `changed`, and pops it only if `changed` is
+  still unset under `mu`: one lock per time added, none per time of a sequence. Ring waits for the earliest of
+  `pending`'s first and `soonest`, the first on a tie. The zero time added fires as now. Reset keeps them; `end` drops
+  them. `WithCoalesce` skips them.
+- Only the Ring under way touches `handle`, `done`, `pending`, `soonest`, `adds` and `timer`.
   `end`, deferred, stops the timer and frees `ringing` under `mu`, so the next Ring takes them over safely, even after
   fn panicked.
 - Close never waits, so fn can call it. Shutdown waits on `ringing`. Neither cancels fn's ctx. Chan's send also selects
@@ -80,7 +89,8 @@ golangci-lint in `./bin`.
 ## Tests
 
 - External test package only. Name a test after its method or option, or its ready-made piece with the package:
-  `TestReset`, `TestShutdown`, `TestWithHolder`, `TestMiddlewareMaxDelay`, `TestPullerHorizon`. `ringing` runs a Ring
+  `TestReset`, `TestAdd`, `TestShutdown`, `TestWithHolder`, `TestMiddlewareMaxDelay`, `TestPullerHorizon`.
+  `TestAdd_Ending` runs on the real clock, looping, to land an Add as the sequence ends. `ringing` runs a Ring
   in a goroutine, for a test that Resets, Closes or Shuts down from outside fn. A subpackage's own tests check its
   piece without Ring: `TestSpin`. A test of reads logs reads and fires together (`reading`, `firing`), so their order
   is checked.

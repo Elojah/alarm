@@ -34,11 +34,14 @@ err = a.Ring(ctx, set.Between(time.Now(), time.Time{}), func(ctx context.Context
 | `a.Ring(ctx, times, fn)` | Calls `fn` with `ctx` and each time once due, in the calling goroutine, until `times` ends, `ctx` is done or `a` is closed. |
 | `a.Chan(ctx, times)` | The same, sending on the returned channel from its own goroutine. |
 | `a.Reset(times)` | Makes the Ring under way drop the times it holds and read `times` instead. |
+| `a.Add(at)` | Makes the Ring under way fire `at` too, in order with its sequence's times; the zero time fires at once. |
+| `a.Remove(at)` | Takes back a time `Add` gave, not fired yet. |
 | `a.Close()` | Stops the Ring under way without waiting for it. Later ones return `ErrClosed`. |
 | `a.Shutdown(ctx)` | `Close`, then waits until the Ring under way returns. |
 
 | Option | Does |
 | --- | --- |
+| `WithAddLimit(n)` | Makes `Add` return false while `n` times added are held. |
 | `WithBuffer(n)` | Makes Chan's channel hold `n` times, so that the reader may lag `n` times. |
 | `WithCoalesce(d, dropped)` | Of a run of times passed by more than `d`, fires only the latest, and reports the others to `dropped`. |
 | `WithHolder(h)` | Lets `h` decide when each time is due, rather than once the clock shows it. |
@@ -67,11 +70,15 @@ fires only the latest of them. Both report what they drop.
 
 ## Stopping and changing the sequence
 
-An Alarm rings one sequence at a time. `Reset`, `Close` and `Shutdown` reach the Ring under way from any goroutine,
-`fn` included, once the `fn` call in progress returns:
+An Alarm rings one sequence at a time. `Reset`, `Add`, `Remove`, `Close` and `Shutdown` reach the Ring under way from
+any goroutine, `fn` included, once the `fn` call in progress returns:
 
 - `Reset` drops the times held and reads the new sequence, such as a rule edited while it rings. `fn` can Reset to the
   next time it computes.
+- `Add` fires one more time, such as a reading on demand, in order with the sequence's, and Ring returns only once it
+  fired. A passed time fires at once, and the zero time first of all, as the time it fires, so that
+  `middleware.MaxDelay` never drops it. Times added are kept apart from the sequence's, so a far one holds back neither,
+  and a Reset keeps them. `Remove` takes one back, and `WithAddLimit` bounds how many are held.
 - `Close` stops the Ring without waiting, so `fn` can call it. `Shutdown` also waits until it returns, or its `ctx` is
   done.
 
@@ -117,6 +124,7 @@ Run one with `go run ./examples/01-ring`.
 | [`07-gateway`](examples/07-gateway/main.go) | A probe polled every 10ms by an rrule set, each reading fanned out by [multicast](https://github.com/elojah/multicast) to a local store and a cloud API. |
 | [`08-adaptive`](examples/08-adaptive/main.go) | A pump sampled every 100ms while idle and every 10ms while running, switching rules with `Reset`. |
 | [`09-coalesce`](examples/09-coalesce/main.go) | A call longer than the gap, after which `WithCoalesce` fires only the latest of the times it passed. |
+| [`10-add`](examples/10-add/main.go) | Times added from `fn` by `Add`, passed, between the sequence's and after its end, and one taken back by `Remove`. |
 
 `07-gateway` and `08-adaptive` are modules of their own, to keep rrule and multicast out of the library's go.mod:
 `go run -C examples/07-gateway .`. Their device, store and cloud are interfaces, faked in `fake.go`.

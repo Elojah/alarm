@@ -372,6 +372,467 @@ func TestReset(t *testing.T) {
 	})
 }
 
+// Times added fire in order with the sequence's, from outside or fn, the passed ones at once and the zero time as the
+// time it fires, kept by Reset, and Ring returns once they fired. A far one holds back neither the sequence nor its
+// reads.
+func TestAdd(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Merged", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var calls []call
+			a := alarm.New()
+			errs := ringing(t.Context(), a, slices.Values(after(start, time.Hour, 3*time.Hour)), record(start, &calls))
+			synctest.Wait()
+			if !a.Add(start.Add(2 * time.Hour)) {
+				t.Error("got false, want true")
+			}
+			if err := <-errs; err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			if want := []call{{time.Hour, time.Hour}, {2 * time.Hour, 2 * time.Hour}, {3 * time.Hour, 3 * time.Hour}}; !slices.Equal(calls, want) {
+				t.Errorf("got %v, want %v", calls, want)
+			}
+		})
+	})
+	t.Run("Passed", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var calls []call
+			a := alarm.New()
+			errs := ringing(t.Context(), a, slices.Values(after(start, time.Hour)), record(start, &calls))
+			time.Sleep(10 * time.Minute)
+			if !a.Add(time.Now()) {
+				t.Error("got false, want true")
+			}
+			if err := <-errs; err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			if want := []call{{10 * time.Minute, 10 * time.Minute}, {time.Hour, time.Hour}}; !slices.Equal(calls, want) {
+				t.Errorf("got %v, want %v", calls, want)
+			}
+		})
+	})
+	t.Run("Zero", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var events []event
+			fire := firing(start, &events)
+			a := alarm.New(alarm.WithMiddleware(middleware.MaxDelay(time.Millisecond, dropping(start, &events))))
+			errs := ringing(t.Context(), a, slices.Values(after(start, time.Millisecond, 2*time.Second)), func(ctx context.Context, at time.Time) {
+				fire(ctx, at)
+				if at.Equal(start.Add(time.Millisecond)) {
+					time.Sleep(time.Second)
+				}
+			})
+			time.Sleep(500 * time.Millisecond)
+			if !a.Add(time.Now()) || !a.Add(time.Time{}) {
+				t.Error("got false, want true")
+			}
+			if err := <-errs; err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			// The zero time fires first, at 1001ms, and the one added at 500ms, late by more than 1ms, is dropped.
+			want := []event{
+				{"fire", time.Millisecond, time.Millisecond},
+				{"fire", 1001 * time.Millisecond, 1001 * time.Millisecond},
+				{"drop", 500 * time.Millisecond, 1001 * time.Millisecond},
+				{"fire", 2 * time.Second, 2 * time.Second},
+			}
+			if !slices.Equal(events, want) {
+				t.Errorf("got %v, want %v", events, want)
+			}
+		})
+	})
+	t.Run("Fn", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var calls []call
+			rec := record(start, &calls)
+			a := alarm.New()
+			err := a.Ring(t.Context(), slices.Values(after(start, 10*time.Millisecond, 20*time.Millisecond, 30*time.Millisecond)), func(ctx context.Context, at time.Time) {
+				rec(ctx, at)
+				if at.Equal(start.Add(20*time.Millisecond)) && (!a.Add(start.Add(25*time.Millisecond)) || !a.Add(start.Add(15*time.Millisecond))) {
+					t.Error("got false, want true")
+				}
+			})
+			if err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			want := []call{
+				{10 * time.Millisecond, 10 * time.Millisecond},
+				{20 * time.Millisecond, 20 * time.Millisecond},
+				{15 * time.Millisecond, 20 * time.Millisecond},
+				{25 * time.Millisecond, 25 * time.Millisecond},
+				{30 * time.Millisecond, 30 * time.Millisecond},
+			}
+			if !slices.Equal(calls, want) {
+				t.Errorf("got %v, want %v", calls, want)
+			}
+		})
+	})
+	t.Run("Reset", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var calls []call
+			a := alarm.New()
+			errs := ringing(t.Context(), a, slices.Values(after(start, time.Hour)), record(start, &calls))
+			synctest.Wait()
+			if !a.Add(start.Add(2*time.Hour)) || !a.Reset(slices.Values(after(start, 3*time.Hour))) {
+				t.Error("got false, want true")
+			}
+			if err := <-errs; err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			if want := []call{{2 * time.Hour, 2 * time.Hour}, {3 * time.Hour, 3 * time.Hour}}; !slices.Equal(calls, want) {
+				t.Errorf("got %v, want %v", calls, want)
+			}
+		})
+	})
+	t.Run("End", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var calls []call
+			rec := record(start, &calls)
+			a := alarm.New()
+			err := a.Ring(t.Context(), slices.Values(after(start, time.Millisecond)), func(ctx context.Context, at time.Time) {
+				rec(ctx, at)
+				if at.Equal(start.Add(time.Millisecond)) && !a.Add(start.Add(time.Hour)) {
+					t.Error("got false, want true")
+				}
+			})
+			if err != nil || time.Since(start) != time.Hour {
+				t.Errorf("got %v at %v, want nil at 1h", err, time.Since(start))
+			}
+			if want := []call{{time.Millisecond, time.Millisecond}, {time.Hour, time.Hour}}; !slices.Equal(calls, want) {
+				t.Errorf("got %v, want %v", calls, want)
+			}
+		})
+	})
+	t.Run("Far", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			year := 365 * 24 * time.Hour
+			var events []event
+			a := alarm.New(alarm.WithPuller(puller.NewHorizon(time.Hour, 1)), alarm.WithPoll(0))
+			errs := ringing(t.Context(), a, reading(start, &events, 2*time.Hour, 3*time.Hour), firing(start, &events))
+			synctest.Wait()
+			if !a.Add(start.Add(year)) {
+				t.Error("got false, want true")
+			}
+			if err := <-errs; err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			// 3h is read at 1h, as with no time added.
+			want := []event{
+				{"read", 2 * time.Hour, 0},
+				{"read", 3 * time.Hour, time.Hour},
+				{"fire", 2 * time.Hour, 2 * time.Hour},
+				{"fire", 3 * time.Hour, 3 * time.Hour},
+				{"fire", year, year},
+			}
+			if !slices.Equal(events, want) {
+				t.Errorf("got %v, want %v", events, want)
+			}
+		})
+	})
+}
+
+// A time added to Chan is sent in order with the sequence's.
+func TestAdd_Chan(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		a := alarm.New()
+		ch := a.Chan(t.Context(), slices.Values(after(start, time.Hour)))
+		synctest.Wait()
+		if !a.Add(start.Add(time.Minute)) {
+			t.Error("got false, want true")
+		}
+		var calls []call
+		for at := range ch {
+			calls = append(calls, call{at: at.Sub(start), now: time.Since(start)})
+		}
+		if want := []call{{time.Minute, time.Minute}, {time.Hour, time.Hour}}; !slices.Equal(calls, want) {
+			t.Errorf("got %v, want %v", calls, want)
+		}
+	})
+}
+
+// Add returns false with no Ring under way, once it returned and after Close, and ctx or Close drop the times
+// added: a later Ring does not fire them.
+func TestAdd_Dropped(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		var calls []call
+		a := alarm.New()
+		if a.Add(start) {
+			t.Error("before Ring: got true, want false")
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		errs := ringing(ctx, a, slices.Values(after(start, time.Hour)), record(start, &calls))
+		synctest.Wait()
+		if !a.Add(start.Add(time.Minute)) {
+			t.Error("got false, want true")
+		}
+		cancel()
+		if err := <-errs; !errors.Is(err, context.Canceled) {
+			t.Errorf("got %v, want %v", err, context.Canceled)
+		}
+		if a.Add(start) {
+			t.Error("after Ring: got true, want false")
+		}
+		// The time added at 1m is not this Ring's.
+		if err := a.Ring(t.Context(), slices.Values(after(start, 2*time.Minute)), record(start, &calls)); err != nil {
+			t.Errorf("got %v, want nil", err)
+		}
+		errs = ringing(t.Context(), a, slices.Values(after(start, time.Hour)), record(start, &calls))
+		synctest.Wait()
+		if !a.Add(start.Add(3 * time.Minute)) {
+			t.Error("got false, want true")
+		}
+		if err := a.Close(); err != nil {
+			t.Errorf("got %v, want nil", err)
+		}
+		if a.Add(start) {
+			t.Error("after Close: got true, want false")
+		}
+		if err := <-errs; !errors.Is(err, alarm.ErrClosed) {
+			t.Errorf("got %v, want %v", err, alarm.ErrClosed)
+		}
+		if want := []call{{2 * time.Minute, 2 * time.Minute}}; !slices.Equal(calls, want) {
+			t.Errorf("got %v, want %v", calls, want)
+		}
+	})
+}
+
+// An Add that returns true fires, even as the sequence ends: Ring takes it before it returns.
+func TestAdd_Ending(t *testing.T) {
+	t.Parallel()
+
+	marker := time.Unix(0, 0)
+	for range 1000 {
+		a := alarm.New()
+		added := make(chan bool, 1)
+		fired := false
+		err := a.Ring(t.Context(), slices.Values(after(time.Now(), -time.Millisecond)), func(_ context.Context, at time.Time) {
+			if at.Equal(marker) {
+				fired = true
+
+				return
+			}
+			// Lands while Ring fires, as its sequence ends, or once it returned.
+			go func() {
+				added <- a.Add(marker)
+			}()
+		})
+		if err != nil {
+			t.Fatalf("got %v, want nil", err)
+		}
+		if <-added && !fired {
+			t.Fatal("added, not fired")
+		}
+	}
+}
+
+// Remove takes back a time added, not fired yet, one of those Equal at a time, the zero time too, even the one Ring
+// waits for, which a Ring whose sequence ended then no longer waits for. It returns false for a time not added, fired,
+// or being fired.
+func TestRemove(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Wait", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var calls []call
+			a := alarm.New(alarm.WithPoll(0))
+			errs := ringing(t.Context(), a, slices.Values(after(start, time.Hour)), record(start, &calls))
+			synctest.Wait()
+			if !a.Add(start.Add(30 * time.Minute)) {
+				t.Error("Add: got false, want true")
+			}
+			time.Sleep(10 * time.Minute)
+			if !a.Remove(start.Add(30 * time.Minute)) {
+				t.Error("Remove: got false, want true")
+			}
+			if err := <-errs; err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			if want := []call{{time.Hour, time.Hour}}; !slices.Equal(calls, want) {
+				t.Errorf("got %v, want %v", calls, want)
+			}
+		})
+	})
+	t.Run("Equal", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var calls []call
+			a := alarm.New()
+			errs := ringing(t.Context(), a, slices.Values(after(start, time.Hour)), record(start, &calls))
+			synctest.Wait()
+			for range 2 {
+				if !a.Add(start.Add(time.Minute)) {
+					t.Error("Add: got false, want true")
+				}
+			}
+			// Equal, though in another location.
+			if !a.Remove(start.Add(time.Minute).In(time.FixedZone("UTC+1", 3600))) {
+				t.Error("Remove: got false, want true")
+			}
+			if err := <-errs; err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			if want := []call{{time.Minute, time.Minute}, {time.Hour, time.Hour}}; !slices.Equal(calls, want) {
+				t.Errorf("got %v, want %v", calls, want)
+			}
+		})
+	})
+	t.Run("Zero", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var calls []call
+			rec := record(start, &calls)
+			a := alarm.New()
+			err := a.Ring(t.Context(), slices.Values(after(start, time.Millisecond)), func(ctx context.Context, at time.Time) {
+				rec(ctx, at)
+				if !a.Add(time.Time{}) || !a.Remove(time.Time{}) {
+					t.Error("got false, want true")
+				}
+			})
+			if err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			if want := []call{{time.Millisecond, time.Millisecond}}; !slices.Equal(calls, want) {
+				t.Errorf("got %v, want %v", calls, want)
+			}
+		})
+	})
+	t.Run("End", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			a := alarm.New()
+			errs := ringing(t.Context(), a, slices.Values(after(start, time.Millisecond)), func(context.Context, time.Time) {})
+			synctest.Wait()
+			if !a.Add(start.Add(time.Hour)) {
+				t.Error("Add: got false, want true")
+			}
+			time.Sleep(10 * time.Second)
+			if !a.Remove(start.Add(time.Hour)) {
+				t.Error("Remove: got false, want true")
+			}
+			if err := <-errs; err != nil || time.Since(start) != 10*time.Second {
+				t.Errorf("got %v at %v, want nil at 10s", err, time.Since(start))
+			}
+		})
+	})
+	t.Run("Absent", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			a := alarm.New()
+			errs := ringing(t.Context(), a, slices.Values(after(start, time.Hour)), func(_ context.Context, at time.Time) {
+				if a.Remove(at) {
+					t.Error("being fired: got true, want false")
+				}
+			})
+			synctest.Wait()
+			if !a.Add(start.Add(time.Minute)) {
+				t.Error("Add: got false, want true")
+			}
+			if a.Remove(start.Add(2 * time.Minute)) {
+				t.Error("not added: got true, want false")
+			}
+			time.Sleep(2 * time.Minute)
+			if a.Remove(start.Add(time.Minute)) {
+				t.Error("fired: got true, want false")
+			}
+			if err := <-errs; err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+		})
+	})
+}
+
+// Add returns false while n times added are held, and true again once one fired or was removed. n <= 0 means no limit.
+func TestWithAddLimit(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Limit", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			start := time.Now()
+			var calls []call
+			a := alarm.New(alarm.WithAddLimit(2))
+			errs := ringing(t.Context(), a, slices.Values(after(start, time.Hour)), record(start, &calls))
+			synctest.Wait()
+			for i, want := range []bool{true, true, false} {
+				if got := a.Add(start.Add(time.Duration(i+1) * 10 * time.Minute)); got != want {
+					t.Errorf("Add %d: got %t, want %t", i, got, want)
+				}
+			}
+			if !a.Remove(start.Add(20*time.Minute)) || !a.Add(start.Add(30*time.Minute)) {
+				t.Error("once removed: got false, want true")
+			}
+			time.Sleep(15 * time.Minute)
+			if !a.Add(start.Add(40 * time.Minute)) {
+				t.Error("once fired: got false, want true")
+			}
+			if err := <-errs; err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+			want := []call{{10 * time.Minute, 10 * time.Minute}, {30 * time.Minute, 30 * time.Minute}, {40 * time.Minute, 40 * time.Minute}, {time.Hour, time.Hour}}
+			if !slices.Equal(calls, want) {
+				t.Errorf("got %v, want %v", calls, want)
+			}
+		})
+	})
+	t.Run("Negative", func(t *testing.T) {
+		t.Parallel()
+
+		synctest.Test(t, func(t *testing.T) {
+			a := alarm.New(alarm.WithAddLimit(-1))
+			errs := ringing(t.Context(), a, slices.Values(after(time.Now(), time.Hour)), func(context.Context, time.Time) {})
+			synctest.Wait()
+			for i := range 3 {
+				if !a.Add(time.Now().Add(time.Duration(i) * time.Minute)) {
+					t.Errorf("Add %d: got false, want true", i)
+				}
+			}
+			if err := <-errs; err != nil {
+				t.Errorf("got %v, want nil", err)
+			}
+		})
+	})
+}
+
 // Close stops Ring while it waits or from fn, without waiting, and every later Close, Shutdown, Ring or Chan returns
 // ErrClosed.
 func TestClose(t *testing.T) {

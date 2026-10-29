@@ -45,6 +45,18 @@ func BenchmarkReset_Passed(b *testing.B) {
 	})
 }
 
+// Ring's cost per time, without waiting, each time one that fn Adds.
+func BenchmarkAdd_Passed(b *testing.B) {
+	a := alarm.New()
+	at := time.Unix(0, 0)
+	_ = a.Ring(b.Context(), slices.Values([]time.Time{at}), func(context.Context, time.Time) {
+		if b.Loop() {
+			at = at.Add(time.Millisecond)
+			a.Add(at)
+		}
+	})
+}
+
 // Chan's cost per time, without waiting: a handoff to the reader.
 func BenchmarkChan_Passed(b *testing.B) {
 	for range alarm.New().Chan(b.Context(), passed(b)) {
